@@ -30,6 +30,7 @@ pub mod filesystem;
 pub mod gpu;
 mod hardware;
 mod recommendations;
+pub mod unmount;
 
 pub use filesystem::{fs_info, is_immutable_os, FilesystemInfo};
 pub use gpu::{
@@ -41,3 +42,4 @@ pub use recommendations::{
     recommended_disk_cache, recommended_disk_io_profile, recommended_memory_cache,
     RecommendedSettings, MIN_DISK_CACHE_BYTES, MIN_MEMORY_CACHE_BYTES,
 };
+pub use unmount::unmount_fuse;

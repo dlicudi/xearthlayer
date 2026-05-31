@@ -5,7 +5,6 @@ use std::future::Future;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::process::Command;
 use std::task::{Context, Poll};
 use thiserror::Error;
 use tokio::sync::oneshot;
@@ -239,55 +238,20 @@ impl SpawnedMountHandle {
         }
     }
 
-    /// Attempt to unmount using fusermount3 or fusermount.
+    /// Attempt to unmount the filesystem at `mountpoint`.
+    ///
+    /// Delegates to the platform-abstracted [`unmount_fuse`] helper
+    /// (fusermount on Linux, umount on macOS).
     ///
     /// # Arguments
     /// * `mountpoint` - Path to unmount
-    /// * `lazy` - If true, use lazy unmount (-uz) which detaches immediately
+    /// * `lazy` - If true, escalate to the platform's most aggressive unmount
+    ///   (Linux lazy `-uz`, macOS force `-f`)
     ///
     /// # Returns
     /// `true` if unmount command succeeded, `false` otherwise
     fn try_unmount(mountpoint: &str, lazy: bool) -> bool {
-        let args: &[&str] = if lazy {
-            &["-uz", mountpoint]
-        } else {
-            &["-u", mountpoint]
-        };
-
-        let result = Command::new("fusermount3")
-            .args(args)
-            .output()
-            .or_else(|_| Command::new("fusermount").args(args).output());
-
-        match result {
-            Ok(output) => {
-                if output.status.success() {
-                    true
-                } else {
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    // "not found" or "not mounted" means already unmounted - that's success
-                    if stderr.contains("not found") || stderr.contains("not mounted") {
-                        true
-                    } else {
-                        debug!(
-                            mountpoint = %mountpoint,
-                            lazy = lazy,
-                            stderr = %stderr,
-                            "fusermount failed"
-                        );
-                        false
-                    }
-                }
-            }
-            Err(e) => {
-                warn!(
-                    mountpoint = %mountpoint,
-                    error = %e,
-                    "Failed to run fusermount"
-                );
-                false
-            }
-        }
+        crate::system::unmount_fuse(std::path::Path::new(mountpoint), lazy)
     }
 
     /// Check if a path is currently mounted.
