@@ -26,6 +26,10 @@ use std::time::Duration;
 use tokio::fs;
 use tracing::{debug, trace};
 
+/// `FOPEN_DIRECT_IO` from `linux/fuse.h`: `#define FOPEN_DIRECT_IO (1 << 0)`.
+/// Bypasses the kernel page cache so every `read()` reaches our handler.
+const FOPEN_DIRECT_IO: u32 = 1;
+
 /// Async multi-threaded FUSE filesystem using fuse3.
 ///
 /// This filesystem overlays an existing scenery pack:
@@ -329,6 +333,35 @@ impl Filesystem for Fuse3PassthroughFS {
 
         let attr = self.metadata_to_attr(ino, &metadata);
         Ok(ReplyAttr { ttl: TTL, attr })
+    }
+
+    /// Open a file.
+    ///
+    /// Linux's kernel honours `FUSE_NO_OPEN_SUPPORT` and handles `open`
+    /// internally when the server returns `ENOSYS`, but macFUSE does not —
+    /// it propagates that `ENOSYS` to the `read()` syscall. So we implement a
+    /// trivial stateless `open` (reads key off the inode, not a file handle).
+    /// Virtual DDS files request direct I/O so every read reaches our handler.
+    async fn open(&self, _req: Request, ino: u64, _flags: u32) -> Fuse3InternalResult<ReplyOpen> {
+        let flags = if InodeManager::is_virtual_inode(ino) {
+            FOPEN_DIRECT_IO
+        } else {
+            0
+        };
+        Ok(ReplyOpen { fh: 0, flags })
+    }
+
+    /// Release an open file. Stateless passthrough holds no per-handle state.
+    async fn release(
+        &self,
+        _req: Request,
+        _ino: u64,
+        _fh: u64,
+        _flags: u32,
+        _lock_owner: u64,
+        _flush: bool,
+    ) -> Fuse3InternalResult<()> {
+        Ok(())
     }
 
     /// Read data from a file.

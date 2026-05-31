@@ -140,6 +140,12 @@ pub trait FileAttrBuilder {
             gid: metadata.gid(),
             rdev: metadata.rdev() as u32,
             blksize: 4096,
+            // macFUSE's FileAttr carries the macOS-only creation time and
+            // BSD file flags. Mirror ctime for crtime; we expose no flags.
+            #[cfg(target_os = "macos")]
+            crtime: UNIX_EPOCH.into(),
+            #[cfg(target_os = "macos")]
+            flags: 0,
         }
     }
 
@@ -169,6 +175,10 @@ pub trait FileAttrBuilder {
             gid: unsafe { libc::getgid() },
             rdev: 0,
             blksize: config.blksize(),
+            #[cfg(target_os = "macos")]
+            crtime: now,
+            #[cfg(target_os = "macos")]
+            flags: 0,
         }
     }
 
@@ -190,6 +200,10 @@ pub trait FileAttrBuilder {
             gid: unsafe { libc::getgid() },
             rdev: 0,
             blksize: 4096,
+            #[cfg(target_os = "macos")]
+            crtime: now,
+            #[cfg(target_os = "macos")]
+            flags: 0,
         }
     }
 
@@ -215,6 +229,10 @@ pub trait FileAttrBuilder {
             gid: unsafe { libc::getgid() },
             rdev: 0,
             blksize: 4096,
+            #[cfg(target_os = "macos")]
+            crtime: now,
+            #[cfg(target_os = "macos")]
+            flags: 0,
         }
     }
 }
