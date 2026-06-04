@@ -32,6 +32,34 @@ use crate::fuse::{get_default_placeholder, validate_dds_or_placeholder, DdsFilen
 /// This value is shared across all filesystem implementations.
 pub const TTL: Duration = Duration::from_secs(1);
 
+/// Experiment flag (env `XEL_SERVE_PLACEHOLDER_ON_MISS=1`).
+///
+/// When set, a FUSE `read` that misses the cache returns the placeholder almost
+/// immediately (after [`PLACEHOLDER_MISS_GRACE`]) instead of blocking on
+/// generation for up to `generation_timeout`, and **leaves the generation job
+/// running** so it backfills the cache for the next read. This bounds read
+/// latency and avoids the long blocking reads whose late replies get dropped
+/// (`EINVAL`, "dropping a failed fuse reply") under bandwidth starvation.
+///
+/// Off by default; read once and cached for the process lifetime.
+fn serve_placeholder_on_miss() -> bool {
+    static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *FLAG.get_or_init(|| {
+        std::env::var("XEL_SERVE_PLACEHOLDER_ON_MISS")
+            .map(|v| {
+                let v = v.trim();
+                v == "1" || v.eq_ignore_ascii_case("true") || v.eq_ignore_ascii_case("yes")
+            })
+            .unwrap_or(false)
+    })
+}
+
+/// Grace period a FUSE read waits for an instant (in-memory) cache hit before
+/// serving the placeholder, when [`serve_placeholder_on_miss`] is enabled.
+/// Large enough to catch a warm-cache hit, small enough that a true miss does
+/// not stall the sim.
+const PLACEHOLDER_MISS_GRACE: Duration = Duration::from_millis(50);
+
 // =============================================================================
 // VirtualDdsConfig - Shared DDS file configuration
 // =============================================================================
@@ -457,9 +485,22 @@ pub trait DdsRequestor: FileAttrBuilder {
         // Submit request via DdsClient
         let rx = client.request_dds(tile, cancellation_token.clone());
 
+        // Experiment (env XEL_SERVE_PLACEHOLDER_ON_MISS): bound read latency.
+        // When enabled, wait only a short grace for an instant cache hit, then
+        // serve the placeholder WITHOUT cancelling — the job keeps running and
+        // backfills the cache (build_and_cache_dds spawns the cache writes on
+        // completion, independent of this receiver). Default: block up to
+        // `timeout` and cancel on stall (original behaviour).
+        let nonblocking = serve_placeholder_on_miss();
+        let wait = if nonblocking {
+            PLACEHOLDER_MISS_GRACE
+        } else {
+            timeout
+        };
+
         // Await response with timeout (instrumented for profiling)
         let dds_await_span = tracing::debug_span!(target: "profiling", "dds_await", tile_row = tile.row, tile_col = tile.col,);
-        match tokio::time::timeout(timeout, rx)
+        match tokio::time::timeout(wait, rx)
             .instrument(dds_await_span)
             .await
         {
@@ -482,6 +523,19 @@ pub trait DdsRequestor: FileAttrBuilder {
                     "DDS daemon channel closed unexpectedly"
                 );
                 cancellation_token.cancel();
+                get_default_placeholder()
+            }
+            Err(_) if nonblocking => {
+                // Expected under serve_placeholder_on_miss: a cache miss, not a
+                // stall. Serve the placeholder now and let generation continue
+                // in the background so the next read for this tile hits cache.
+                debug!(
+                    tile_row = tile.row,
+                    tile_col = tile.col,
+                    tile_zoom = tile.zoom,
+                    context = context_label,
+                    "serve_placeholder_on_miss: cache miss, serving placeholder; generation continues in background"
+                );
                 get_default_placeholder()
             }
             Err(_) => {
