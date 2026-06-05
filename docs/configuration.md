@@ -217,12 +217,14 @@ Controls parallel tile generation.
 |---------|------|---------|-------------|
 | `threads` | integer | `num_cpus / 2` | Number of worker threads for parallel tile generation — leaves headroom for X-Plane |
 | `timeout` | integer | `10` | Timeout in seconds for generating a single tile. If exceeded, returns a magenta placeholder. |
+| `max_source_zoom` | integer | `17` | Highest imagery zoom (ZL) to download. Tiles the scenery requests *above* this are fetched at this zoom and upscaled. `0` disables the cap. Range `0`–`18`. |
 
 **Example:**
 ```ini
 [generation]
 threads = 8
 timeout = 10
+max_source_zoom = 17
 ```
 
 **Performance Notes:**
@@ -230,6 +232,13 @@ timeout = 10
 - Do not set `threads` higher than your CPU core count
 - The timeout prevents X-Plane from hanging if a tile download stalls
 - Magenta placeholder tiles indicate timeouts or download failures
+
+**`max_source_zoom` (source-zoom cap / upscaling):**
+- Caps the imagery zoom actually downloaded. It only ever *lowers* detail it would fetch — it never raises detail (it cannot invent pixels). Tiles requested at or below the cap download natively, untouched.
+- Each zoom level a tile is capped below its request cuts the download ~4× (the same geographic box is fetched as a smaller chunk grid, then upscaled to the full 4096×4096 texture with Lanczos3). E.g. a ZL18 tile under `max_source_zoom = 16` downloads 16 chunks instead of 256 (16×) and is upscaled.
+- Use it to relieve bandwidth starvation: high-ZL detail zones (often near airports) are the heaviest download bursts; capping them keeps reads fast and degrades to *slightly softer imagery* instead of magenta. The DDS filename, tile grid, and geographic coverage X-Plane sees are unchanged.
+- `17` (default) keeps the common ZL16 baseline native while pulling ZL18 down one level (still ~1.2 m/px). Drop to `16` for maximum relief (softer airports); set `0` to always download at the requested zoom.
+- A tile cannot be built from less than a single source chunk, so caps more than 4 levels below a request are clamped to that floor (a 256×256 chunk upscaled 16×).
 
 ### [executor]
 

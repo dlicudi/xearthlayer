@@ -99,7 +99,51 @@ impl TileCoord {
         let dsf_lon = lon.floor() as i32;
         super::format_dsf_name(dsf_lat, dsf_lon)
     }
+
+    /// Computes the source sampling grid for this tile under an optional zoom cap.
+    ///
+    /// `max_source_zoom` is expressed in **chunk-zoom (ZL) terms** — the same
+    /// units as the DDS filename (`..._ZL16.dds`) and the `generation.max_source_zoom`
+    /// config — *not* the tile zoom. A tile's requested chunk zoom is
+    /// `self.zoom + CHUNK_ZOOM_OFFSET` (e.g. a `zoom = 14` tile is ZL18).
+    ///
+    /// - `None` or `>= requested chunk zoom` → identity: the native 16×16 chunk
+    ///   grid at `self.zoom`, `upscale_factor == 1` (behaviour unchanged).
+    /// - `< requested chunk zoom` → the *same geographic box* fetched at the
+    ///   capped chunk zoom as a smaller `grid_side × grid_side` grid, to be
+    ///   upscaled to the full 4096×4096 texture by `upscale_factor`.
+    ///
+    /// The cap is clamped to at most `MAX_SOURCE_DOWNSAMPLE` levels below the
+    /// request (a single 256×256 chunk is the most a tile can be built from; you
+    /// cannot downsample below one chunk per side). Because `grid_side` always
+    /// divides 16 and the origin is a multiple of `grid_side`, the fetched chunks
+    /// always fall within a single source tile — no straddling.
+    #[inline]
+    pub fn source_grid(&self, max_source_zoom: Option<u8>) -> SourceGrid {
+        // Work entirely in chunk-zoom (ZL) units, matching the cap and filenames.
+        let requested_chunk_zoom = self.zoom + CHUNK_ZOOM_OFFSET;
+        let min_chunk_zoom = requested_chunk_zoom.saturating_sub(MAX_SOURCE_DOWNSAMPLE);
+        let capped_chunk_zoom = max_source_zoom
+            .unwrap_or(requested_chunk_zoom)
+            .clamp(min_chunk_zoom, requested_chunk_zoom);
+        let delta = requested_chunk_zoom - capped_chunk_zoom;
+
+        SourceGrid {
+            source_zoom: self.zoom - delta,
+            chunk_zoom: capped_chunk_zoom,
+            grid_side: CHUNKS_PER_TILE_SIDE >> delta,
+            origin_chunk_row: (self.row * CHUNKS_PER_TILE_SIDE) >> delta,
+            origin_chunk_col: (self.col * CHUNKS_PER_TILE_SIDE) >> delta,
+            upscale_factor: 1u32 << delta,
+        }
+    }
 }
+
+/// Maximum number of zoom levels a tile may be downsampled when capping the
+/// source zoom. A tile is 16×16 chunks (`2^4`), so beyond 4 levels the grid
+/// would shrink below a single chunk per side, which the chunk model cannot
+/// represent. Caps below `self.zoom - 4` are clamped to this floor.
+pub const MAX_SOURCE_DOWNSAMPLE: u8 = 4;
 
 /// Iterator over all chunks in a tile.
 ///
@@ -180,6 +224,39 @@ impl ChunkCoord {
     }
 }
 
+/// Describes how a tile's imagery is sampled when the source zoom is capped.
+///
+/// Produced by [`TileCoord::source_grid`]. The downloaded chunk grid is
+/// `grid_side × grid_side` chunks at `chunk_zoom`, assembled into a
+/// `grid_side * 256` square image and scaled by `upscale_factor` to the final
+/// 4096×4096 texture. When the cap does not bite, this is the identity
+/// (`grid_side == 16`, `upscale_factor == 1`) and no scaling occurs.
+///
+/// Invariant: `grid_side * 256 * upscale_factor == 4096`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SourceGrid {
+    /// Tile zoom actually fetched (`== requested zoom` when uncapped).
+    pub source_zoom: u8,
+    /// Chunk (imagery) zoom of the fetched chunks (`source_zoom + 4`).
+    pub chunk_zoom: u8,
+    /// Number of chunks per side of the fetched grid (`16` when uncapped).
+    pub grid_side: u32,
+    /// Global chunk row of the grid's top-left chunk, at `chunk_zoom`.
+    pub origin_chunk_row: u32,
+    /// Global chunk column of the grid's top-left chunk, at `chunk_zoom`.
+    pub origin_chunk_col: u32,
+    /// Linear scale factor from the assembled image to 4096×4096 (`1` uncapped).
+    pub upscale_factor: u32,
+}
+
+impl SourceGrid {
+    /// Returns true when this grid samples at native resolution (no upscaling).
+    #[inline]
+    pub fn is_native(&self) -> bool {
+        self.upscale_factor == 1
+    }
+}
+
 /// Errors that can occur during coordinate conversion.
 #[derive(Debug, Clone, PartialEq)]
 pub enum CoordError {
@@ -229,3 +306,178 @@ impl fmt::Display for CoordError {
 }
 
 impl std::error::Error for CoordError {}
+
+#[cfg(test)]
+mod source_grid_tests {
+    use super::*;
+
+    // The cap is in chunk-zoom (ZL) units. Real tiles have a *tile* zoom of
+    // `ZL - CHUNK_ZOOM_OFFSET`, so a ZL18 tile is `zoom = 14` and a ZL16 tile is
+    // `zoom = 12`. These helpers keep the tests in those real units.
+    const ZL16_TILE_ZOOM: u8 = 16 - CHUNK_ZOOM_OFFSET; // 12
+    const ZL18_TILE_ZOOM: u8 = 18 - CHUNK_ZOOM_OFFSET; // 14
+
+    /// Helper: invariant that the assembled, upscaled image is always 4096².
+    fn assert_fills_tile(g: &SourceGrid) {
+        assert_eq!(
+            g.grid_side * 256 * g.upscale_factor,
+            4096,
+            "grid {:?} does not fill a 4096 tile",
+            g
+        );
+    }
+
+    #[test]
+    fn no_cap_is_identity() {
+        let tile = TileCoord {
+            row: 100,
+            col: 200,
+            zoom: ZL18_TILE_ZOOM,
+        };
+        let g = tile.source_grid(None);
+        assert_eq!(g.source_zoom, ZL18_TILE_ZOOM);
+        assert_eq!(g.chunk_zoom, 18); // ZL18
+        assert_eq!(g.grid_side, 16);
+        assert_eq!(g.upscale_factor, 1);
+        assert_eq!(g.origin_chunk_row, 100 * 16);
+        assert_eq!(g.origin_chunk_col, 200 * 16);
+        assert!(g.is_native());
+        assert_fills_tile(&g);
+    }
+
+    #[test]
+    fn cap_at_or_above_request_is_identity() {
+        // A ZL16 tile under caps of ZL16/17/18 must stay native.
+        let tile = TileCoord {
+            row: 1,
+            col: 1,
+            zoom: ZL16_TILE_ZOOM,
+        };
+        for cap in [Some(16), Some(17), Some(18)] {
+            let g = tile.source_grid(cap);
+            assert_eq!(g.grid_side, 16, "cap {:?} should be native", cap);
+            assert_eq!(g.source_zoom, ZL16_TILE_ZOOM);
+            assert_eq!(g.chunk_zoom, 16);
+            assert_eq!(g.upscale_factor, 1);
+            assert!(g.is_native());
+        }
+    }
+
+    /// Regression test for the tile-zoom-vs-chunk-ZL unit bug found in the flight
+    /// test: a ZL18 tile under a cap of ZL17 *must* downsample (the cap is in ZL
+    /// units, not tile-zoom units). The old code compared 17 against tile zoom 14
+    /// and never fired.
+    #[test]
+    fn zl18_capped_to_17_downsamples_one_level() {
+        let tile = TileCoord {
+            row: 1000,
+            col: 2000,
+            zoom: ZL18_TILE_ZOOM,
+        };
+        let g = tile.source_grid(Some(17));
+        assert_eq!(g.source_zoom, 13); // tile zoom 14 - 1
+        assert_eq!(g.chunk_zoom, 17); // ZL17
+        assert_eq!(g.grid_side, 8);
+        assert_eq!(g.upscale_factor, 2);
+        assert_eq!(g.origin_chunk_row, (1000 * 16) >> 1);
+        assert_eq!(g.origin_chunk_col, (2000 * 16) >> 1);
+        assert!(!g.is_native(), "cap ZL17 must bite a ZL18 tile");
+        assert_fills_tile(&g);
+    }
+
+    #[test]
+    fn zl18_capped_to_16_downsamples_two_levels() {
+        let tile = TileCoord {
+            row: 1000,
+            col: 2000,
+            zoom: ZL18_TILE_ZOOM,
+        };
+        let g = tile.source_grid(Some(16));
+        assert_eq!(g.source_zoom, 12); // ZL16 tile zoom
+        assert_eq!(g.chunk_zoom, 16);
+        assert_eq!(g.grid_side, 4); // 16 chunks vs 256 native -> 16x fewer
+        assert_eq!(g.upscale_factor, 4);
+        assert_eq!(g.origin_chunk_row, (1000 * 16) >> 2);
+        assert_eq!(g.origin_chunk_col, (2000 * 16) >> 2);
+        assert_fills_tile(&g);
+    }
+
+    #[test]
+    fn max_downsample_is_single_chunk() {
+        let tile = TileCoord {
+            row: 5,
+            col: 7,
+            zoom: ZL18_TILE_ZOOM,
+        };
+        // Δ4 (ZL18 -> ZL14): one 256² chunk upscaled 16x to fill the tile.
+        let g = tile.source_grid(Some(14));
+        assert_eq!(g.chunk_zoom, 14);
+        assert_eq!(g.grid_side, 1);
+        assert_eq!(g.upscale_factor, 16);
+        assert_fills_tile(&g);
+    }
+
+    #[test]
+    fn cap_below_floor_is_clamped_to_max_downsample() {
+        let tile = TileCoord {
+            row: 5,
+            col: 7,
+            zoom: ZL18_TILE_ZOOM,
+        };
+        // Asking for ZL10 (Δ8 below ZL18) clamps to Δ4 — never a zero-side grid.
+        let g = tile.source_grid(Some(10));
+        assert_eq!(g.chunk_zoom, 18 - MAX_SOURCE_DOWNSAMPLE); // ZL14 floor
+        assert_eq!(g.grid_side, 1);
+        assert_eq!(g.upscale_factor, 16);
+        assert!(g.grid_side >= 1, "grid_side must never underflow to 0");
+        assert_fills_tile(&g);
+    }
+
+    #[test]
+    fn zl16_native_is_unaffected_by_cap_17() {
+        // The 95% case in the installed scenery: ZL16 tiles with a cap of ZL17
+        // must download natively, untouched.
+        let tile = TileCoord {
+            row: 12754,
+            col: 5279,
+            zoom: ZL16_TILE_ZOOM,
+        };
+        let g = tile.source_grid(Some(17));
+        assert_eq!(g.grid_side, 16);
+        assert_eq!(g.chunk_zoom, 16);
+        assert!(g.is_native());
+    }
+
+    #[test]
+    fn fetched_grid_lies_within_a_single_source_tile() {
+        // For every Δ and a spread of tile coords, the grid_side block must not
+        // straddle a source-tile (16-chunk) boundary. Caps are in chunk-ZL units.
+        for tile_zoom in [ZL16_TILE_ZOOM, ZL18_TILE_ZOOM] {
+            let requested_zl = tile_zoom + CHUNK_ZOOM_OFFSET;
+            for &cap in &[requested_zl - 1, requested_zl - 2] {
+                for row in [0u32, 1, 3, 7, 15, 16, 33, 1000] {
+                    for col in [0u32, 1, 4, 15, 16, 31, 2000] {
+                        let g = TileCoord {
+                            row,
+                            col,
+                            zoom: tile_zoom,
+                        }
+                        .source_grid(Some(cap));
+                        let first_tile_row = g.origin_chunk_row / 16;
+                        let last_tile_row = (g.origin_chunk_row + g.grid_side - 1) / 16;
+                        let first_tile_col = g.origin_chunk_col / 16;
+                        let last_tile_col = (g.origin_chunk_col + g.grid_side - 1) / 16;
+                        assert_eq!(
+                            first_tile_row, last_tile_row,
+                            "row straddle at {row},{col} tile_zoom {tile_zoom} cap {cap}: {g:?}"
+                        );
+                        assert_eq!(
+                            first_tile_col, last_tile_col,
+                            "col straddle at {row},{col} tile_zoom {tile_zoom} cap {cap}: {g:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}

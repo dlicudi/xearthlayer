@@ -60,6 +60,7 @@ pub enum ConfigKey {
     // Generation settings
     GenerationThreads,
     GenerationTimeout,
+    GenerationMaxSourceZoom,
 
     // X-Plane settings
     XplaneSceneryDir,
@@ -145,6 +146,7 @@ impl FromStr for ConfigKey {
 
             "generation.threads" => Ok(ConfigKey::GenerationThreads),
             "generation.timeout" => Ok(ConfigKey::GenerationTimeout),
+            "generation.max_source_zoom" => Ok(ConfigKey::GenerationMaxSourceZoom),
 
             "xplane.scenery_dir" => Ok(ConfigKey::XplaneSceneryDir),
 
@@ -225,6 +227,7 @@ impl ConfigKey {
             ConfigKey::TextureGpuDevice => "texture.gpu_device",
             ConfigKey::GenerationThreads => "generation.threads",
             ConfigKey::GenerationTimeout => "generation.timeout",
+            ConfigKey::GenerationMaxSourceZoom => "generation.max_source_zoom",
             ConfigKey::XplaneSceneryDir => "xplane.scenery_dir",
             ConfigKey::PackagesLibraryUrl => "packages.library_url",
             ConfigKey::PackagesInstallLocation => "packages.install_location",
@@ -326,6 +329,7 @@ impl ConfigKey {
             ConfigKey::TextureGpuDevice => config.texture.gpu_device.clone(),
             ConfigKey::GenerationThreads => config.generation.threads.to_string(),
             ConfigKey::GenerationTimeout => config.generation.timeout.to_string(),
+            ConfigKey::GenerationMaxSourceZoom => config.generation.max_source_zoom.to_string(),
             ConfigKey::XplaneSceneryDir => config
                 .xplane
                 .scenery_dir
@@ -481,6 +485,9 @@ impl ConfigKey {
             }
             ConfigKey::GenerationTimeout => {
                 config.generation.timeout = value.parse().unwrap();
+            }
+            ConfigKey::GenerationMaxSourceZoom => {
+                config.generation.max_source_zoom = value.parse().unwrap();
             }
             ConfigKey::XplaneSceneryDir => {
                 config.xplane.scenery_dir = optional_path(value);
@@ -643,6 +650,9 @@ impl ConfigKey {
             ConfigKey::TextureGpuDevice => Box::new(NonEmptyStringSpec),
             ConfigKey::GenerationThreads => Box::new(PositiveIntegerSpec),
             ConfigKey::GenerationTimeout => Box::new(PositiveIntegerSpec),
+            ConfigKey::GenerationMaxSourceZoom => {
+                Box::new(IntegerRangeSpec::new(0, crate::coord::MAX_ZOOM as u64))
+            }
             ConfigKey::XplaneSceneryDir => Box::new(OptionalPathSpec),
             ConfigKey::PackagesLibraryUrl => Box::new(OptionalUrlSpec),
             ConfigKey::PackagesInstallLocation => Box::new(OptionalPathSpec),
@@ -717,6 +727,7 @@ impl ConfigKey {
             ConfigKey::TextureGpuDevice,
             ConfigKey::GenerationThreads,
             ConfigKey::GenerationTimeout,
+            ConfigKey::GenerationMaxSourceZoom,
             ConfigKey::XplaneSceneryDir,
             ConfigKey::PackagesLibraryUrl,
             ConfigKey::PackagesInstallLocation,
@@ -1173,6 +1184,36 @@ mod tests {
         assert!(ConfigKey::GenerationTimeout.validate("0").is_ok());
         assert!(ConfigKey::GenerationTimeout.validate("-1").is_err());
         assert!(ConfigKey::GenerationTimeout.validate("abc").is_err());
+    }
+
+    #[test]
+    fn test_max_source_zoom_key_roundtrip() {
+        // Parses from its canonical name and renders back to it.
+        let key = ConfigKey::from_str("generation.max_source_zoom").unwrap();
+        assert_eq!(key, ConfigKey::GenerationMaxSourceZoom);
+        assert_eq!(key.name(), "generation.max_source_zoom");
+        assert!(ConfigKey::all().contains(&ConfigKey::GenerationMaxSourceZoom));
+    }
+
+    #[test]
+    fn test_max_source_zoom_validation_bounds() {
+        let key = ConfigKey::GenerationMaxSourceZoom;
+        assert!(key.validate("0").is_ok()); // disabled
+        assert!(key.validate("16").is_ok());
+        assert!(key.validate("18").is_ok()); // MAX_ZOOM
+        assert!(key.validate("19").is_err()); // above MAX_ZOOM
+        assert!(key.validate("-1").is_err());
+        assert!(key.validate("abc").is_err());
+    }
+
+    #[test]
+    fn test_max_source_zoom_get_set() {
+        let mut config = ConfigFile::default();
+        ConfigKey::GenerationMaxSourceZoom
+            .set(&mut config, "16")
+            .unwrap();
+        assert_eq!(config.generation.max_source_zoom, 16);
+        assert_eq!(ConfigKey::GenerationMaxSourceZoom.get(&config), "16");
     }
 
     #[test]

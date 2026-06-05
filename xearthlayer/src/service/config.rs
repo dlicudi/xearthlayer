@@ -49,6 +49,9 @@ pub struct ServiceConfig {
     generation_threads: Option<usize>,
     /// Timeout in seconds for generating a single tile
     generation_timeout: Option<u64>,
+    /// Source-zoom cap (already resolved; `None` = no cap). Tiles requested above
+    /// this zoom are fetched at this zoom and upscaled.
+    generation_max_source_zoom: Option<u8>,
     /// Quiet mode - disables periodic stats logging (for TUI mode)
     quiet_mode: bool,
     /// Pipeline configuration for concurrency and retry behavior
@@ -118,6 +121,11 @@ impl ServiceConfig {
         self.generation_timeout
     }
 
+    /// Get the source-zoom cap (`None` = download every tile at its native zoom).
+    pub fn source_zoom_cap(&self) -> Option<u8> {
+        self.generation_max_source_zoom
+    }
+
     /// Check if quiet mode is enabled (disables periodic stats logging).
     pub fn quiet_mode(&self) -> bool {
         self.quiet_mode
@@ -156,6 +164,7 @@ impl Default for ServiceConfig {
             disk_gc_interval_secs: DEFAULT_GC_INTERVAL_SECS,
             generation_threads: None,
             generation_timeout: None,
+            generation_max_source_zoom: None,
             quiet_mode: false,
             pipeline: PipelineSettings {
                 max_http_concurrent: default_http_concurrent(),
@@ -192,6 +201,7 @@ pub struct ServiceConfigBuilder {
     disk_gc_interval_secs: Option<u64>,
     generation_threads: Option<usize>,
     generation_timeout: Option<u64>,
+    generation_max_source_zoom: Option<u8>,
     quiet_mode: Option<bool>,
     pipeline: Option<PipelineSettings>,
     control_plane: Option<ControlPlaneSettings>,
@@ -264,6 +274,13 @@ impl ServiceConfigBuilder {
         self
     }
 
+    /// Sets the source-zoom cap. Pass an already-resolved `Option<u8>`
+    /// (e.g. `GenerationSettings::source_zoom_cap()`); `None` disables capping.
+    pub fn generation_max_source_zoom(mut self, cap: Option<u8>) -> Self {
+        self.generation_max_source_zoom = cap;
+        self
+    }
+
     /// Enable quiet mode (disables periodic stats logging).
     pub fn quiet_mode(mut self, quiet: bool) -> Self {
         self.quiet_mode = Some(quiet);
@@ -306,6 +323,7 @@ impl ServiceConfigBuilder {
                 .unwrap_or(DEFAULT_GC_INTERVAL_SECS),
             generation_threads: self.generation_threads,
             generation_timeout: self.generation_timeout,
+            generation_max_source_zoom: self.generation_max_source_zoom,
             quiet_mode: self.quiet_mode.unwrap_or(false),
             pipeline: self.pipeline.unwrap_or(PipelineSettings {
                 max_http_concurrent: default_http_concurrent(),
@@ -343,6 +361,22 @@ mod tests {
         let config = ServiceConfig::builder().build();
         assert!(config.cache_enabled());
         assert!(config.mountpoint().is_none());
+        // No cap by default at the service layer (the file default is applied upstream).
+        assert_eq!(config.source_zoom_cap(), None);
+    }
+
+    #[test]
+    fn test_builder_propagates_source_zoom_cap() {
+        let config = ServiceConfig::builder()
+            .generation_max_source_zoom(Some(16))
+            .build();
+        assert_eq!(config.source_zoom_cap(), Some(16));
+
+        // Disabled cap stays None.
+        let none = ServiceConfig::builder()
+            .generation_max_source_zoom(None)
+            .build();
+        assert_eq!(none.source_zoom_cap(), None);
     }
 
     #[test]

@@ -107,6 +107,25 @@ pub struct GenerationSettings {
     /// If exceeded, returns a magenta placeholder.
     /// Default: 10 seconds.
     pub timeout: u64,
+    /// Highest imagery zoom (ZL) to download from the provider.
+    ///
+    /// Tiles the scenery requests *above* this zoom are fetched at this zoom and
+    /// upscaled to fill the texture, cutting download volume ~4x per level below
+    /// the request. Tiles at or below it are fetched natively (untouched). This
+    /// only ever caps detail — it never raises it.
+    ///
+    /// `0` disables the cap (always download at the requested zoom).
+    /// Range: `0..=MAX_ZOOM`. Default: 17.
+    pub max_source_zoom: u8,
+}
+
+impl GenerationSettings {
+    /// Returns the source-zoom cap as an `Option`, mapping the `0`-means-disabled
+    /// config convention to `None`. Used when building the download grid: `None`
+    /// (or a cap at/above the requested zoom) yields native, unchanged behaviour.
+    pub fn source_zoom_cap(&self) -> Option<u8> {
+        (self.max_source_zoom != 0).then_some(self.max_source_zoom)
+    }
 }
 
 /// Pipeline configuration for concurrency and retry behavior.
@@ -335,4 +354,28 @@ pub struct FuseSettings {
     /// Kernel starts throttling when pending requests exceed this.
     /// Default: 192 (75% of max_background)
     pub congestion_threshold: u16,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn generation_with_cap(max_source_zoom: u8) -> GenerationSettings {
+        GenerationSettings {
+            threads: 4,
+            timeout: 10,
+            max_source_zoom,
+        }
+    }
+
+    #[test]
+    fn source_zoom_cap_maps_zero_to_none() {
+        assert_eq!(generation_with_cap(0).source_zoom_cap(), None);
+    }
+
+    #[test]
+    fn source_zoom_cap_passes_through_nonzero() {
+        assert_eq!(generation_with_cap(16).source_zoom_cap(), Some(16));
+        assert_eq!(generation_with_cap(17).source_zoom_cap(), Some(17));
+    }
 }

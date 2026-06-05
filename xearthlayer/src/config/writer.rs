@@ -115,6 +115,11 @@ threads = {}
 ; Timeout in seconds for generating a single tile (default: 10)
 ; If exceeded, returns a magenta placeholder texture
 timeout = {}
+; Highest imagery zoom (ZL) to download (default: 17, range: 0-18)
+; Tiles the scenery requests ABOVE this are fetched at this zoom and upscaled,
+; cutting download volume ~4x per level below the request. Tiles at or below it
+; are fetched natively. Only caps detail, never raises it. 0 = no cap.
+max_source_zoom = {}
 
 [executor]
 ; Job executor daemon settings for tile generation.
@@ -278,6 +283,7 @@ congestion_threshold = {}
         config.texture.gpu_device,
         config.generation.threads,
         config.generation.timeout,
+        config.generation.max_source_zoom,
         // Executor settings
         config.executor.network_concurrent,
         config.executor.cpu_concurrent,

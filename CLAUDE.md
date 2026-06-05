@@ -359,7 +359,7 @@ Key sections:
 - `[general]` - General settings (update_check)
 - `[provider]` - Imagery source (bing/google)
 - `[cache]` - Memory/disk sizes, directory, DDS disk ratio, disk I/O profile (auto/hdd/ssd/nvme)
-- `[generation]` - Thread count, timeout
+- `[generation]` - Thread count, timeout, source-zoom cap (`max_source_zoom`: fetch tiles requested above this ZL at this ZL and upscale; 0 disables)
 - `[texture]` - DDS format (bc1/bc3), compressor backend (software/ispc/gpu), GPU device selection
 - `[prefetch]` - Boundary-driven prefetch, web_api_port (default 8086), calibration, transition ramp
 - `[prewarm]` - Cold-start cache warming (grid_rows/grid_cols for DSF tile grid around airport)

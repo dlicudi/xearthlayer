@@ -15,6 +15,14 @@ pub struct ChunkResults {
 
     /// Failed chunks: (row, col) with error info
     pub failures: Vec<ChunkFailure>,
+
+    /// Number of chunks per side of this result's grid.
+    ///
+    /// `16` for a natively-sampled tile (256 chunks). When the source zoom is
+    /// capped, a tile is built from a smaller `grid_side × grid_side` block that
+    /// is later upscaled — e.g. `4` (16 chunks) for a two-level downsample.
+    /// Completeness and the assembly canvas size are driven by this.
+    grid_side: u32,
 }
 
 /// A successfully downloaded chunk.
@@ -42,12 +50,32 @@ pub struct ChunkFailure {
 }
 
 impl ChunkResults {
-    /// Creates a new empty ChunkResults.
+    /// Creates a new empty ChunkResults for a native 16×16 (256-chunk) tile.
     pub fn new() -> Self {
+        Self::with_grid_side(crate::coord::CHUNKS_PER_TILE_SIDE)
+    }
+
+    /// Creates a new empty ChunkResults for a `grid_side × grid_side` grid.
+    ///
+    /// Use `16` for native sampling; a smaller value for a capped/upscaled tile.
+    pub fn with_grid_side(grid_side: u32) -> Self {
         Self {
-            successes: Vec::with_capacity(256),
+            successes: Vec::with_capacity((grid_side * grid_side) as usize),
             failures: Vec::new(),
+            grid_side,
         }
+    }
+
+    /// Returns the number of chunks per side of this result's grid.
+    #[inline]
+    pub fn grid_side(&self) -> u32 {
+        self.grid_side
+    }
+
+    /// Returns the number of chunks a complete grid contains (`grid_side²`).
+    #[inline]
+    pub fn expected_chunks(&self) -> usize {
+        (self.grid_side * self.grid_side) as usize
     }
 
     /// Adds a successful chunk download.
@@ -77,16 +105,20 @@ impl ChunkResults {
         self.failures.len()
     }
 
-    /// Returns the total number of chunks processed (should be 256).
+    /// Returns the total number of chunks processed (should be `expected_chunks`).
     #[inline]
     pub fn total_count(&self) -> usize {
         self.successes.len() + self.failures.len()
     }
 
-    /// Returns true if all 256 chunks were successful.
+    /// Returns true if every chunk in the grid downloaded successfully.
+    ///
+    /// For a native tile this means all 256 chunks; for a capped grid it means
+    /// all `grid_side²` chunks. A complete capped grid is a fully-successful
+    /// (upscaled) tile and is therefore cacheable — see issue #180.
     #[inline]
     pub fn is_complete(&self) -> bool {
-        self.successes.len() == 256 && self.failures.is_empty()
+        self.successes.len() == self.expected_chunks() && self.failures.is_empty()
     }
 
     /// Returns the success rate as a percentage (0.0 - 100.0).
@@ -186,5 +218,33 @@ mod tests {
 
         assert!(results.is_complete());
         assert_eq!(results.success_rate(), 100.0);
+    }
+
+    #[test]
+    fn test_capped_grid_is_complete_at_grid_side_squared() {
+        // A 4×4 (capped, Δ2) grid is complete at 16 chunks, not 256.
+        let mut results = ChunkResults::with_grid_side(4);
+        assert_eq!(results.grid_side(), 4);
+        assert_eq!(results.expected_chunks(), 16);
+
+        for row in 0..4u8 {
+            for col in 0..4u8 {
+                assert!(!results.is_complete());
+                results.add_success(row, col, vec![0]);
+            }
+        }
+        assert!(results.is_complete());
+        assert_eq!(results.success_rate(), 100.0);
+    }
+
+    #[test]
+    fn test_capped_grid_incomplete_with_one_failure() {
+        let mut results = ChunkResults::with_grid_side(4);
+        for i in 0..15u8 {
+            results.add_success(i / 4, i % 4, vec![0]);
+        }
+        results.add_failure(3, 3, 1, "timeout".to_string());
+        assert_eq!(results.total_count(), 16);
+        assert!(!results.is_complete());
     }
 }

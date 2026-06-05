@@ -34,7 +34,6 @@ use tracing::{debug, info, warn};
 /// Tile dimensions
 const TILE_SIZE: u32 = 4096;
 const CHUNK_SIZE: u32 = 256;
-const CHUNKS_PER_SIDE: u32 = 16;
 
 /// Magenta color for failed chunks (R=255, G=0, B=255, A=255)
 const MAGENTA: Rgba<u8> = Rgba([255, 0, 255, 255]);
@@ -344,12 +343,18 @@ where
 // ============================================================================
 
 /// Synchronous chunk assembly (runs in spawn_blocking).
+///
+/// Builds a `grid_side × grid_side` chunk canvas, then upscales it to the full
+/// 4096×4096 tile when the grid was capped below native (Lanczos3). For a native
+/// 16×16 grid the canvas is already 4096² and no scaling occurs.
 fn assemble_chunks(chunks: ChunkResults) -> Result<RgbaImage, String> {
-    let mut canvas = RgbaImage::new(TILE_SIZE, TILE_SIZE);
+    let grid_side = chunks.grid_side();
+    let canvas_size = grid_side * CHUNK_SIZE;
+    let mut canvas = RgbaImage::new(canvas_size, canvas_size);
 
     // Process each chunk position
-    for row in 0..CHUNKS_PER_SIDE as u8 {
-        for col in 0..CHUNKS_PER_SIDE as u8 {
+    for row in 0..grid_side as u8 {
+        for col in 0..grid_side as u8 {
             let x_offset = col as u32 * CHUNK_SIZE;
             let y_offset = row as u32 * CHUNK_SIZE;
 
@@ -375,6 +380,17 @@ fn assemble_chunks(chunks: ChunkResults) -> Result<RgbaImage, String> {
                 fill_magenta(&mut canvas, x_offset, y_offset);
             }
         }
+    }
+
+    // Upscale a capped grid to the full tile size X-Plane expects. Lanczos3 keeps
+    // upscaled imagery as sharp as interpolation allows. No-op for native grids.
+    if canvas_size != TILE_SIZE {
+        canvas = image::imageops::resize(
+            &canvas,
+            TILE_SIZE,
+            TILE_SIZE,
+            image::imageops::FilterType::Lanczos3,
+        );
     }
 
     Ok(canvas)
@@ -448,6 +464,48 @@ mod tests {
         assert_eq!(*canvas.get_pixel(255, 0), MAGENTA);
         assert_eq!(*canvas.get_pixel(0, 255), MAGENTA);
         assert_eq!(*canvas.get_pixel(256, 0), Rgba([0, 0, 0, 0]));
+    }
+
+    /// Encodes a solid-color 256×256 chunk as JPEG (what providers return).
+    fn solid_jpeg(color: Rgba<u8>) -> Vec<u8> {
+        let img = RgbaImage::from_pixel(CHUNK_SIZE, CHUNK_SIZE, color);
+        let mut buf = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(img)
+            .write_to(&mut buf, image::ImageFormat::Jpeg)
+            .unwrap();
+        buf.into_inner()
+    }
+
+    #[test]
+    fn test_assemble_capped_grid_upscales_to_tile_size() {
+        // A complete 4×4 (Δ2) grid of red chunks must assemble to a full 4096²
+        // tile of real (upscaled) imagery — not a quarter-filled magenta canvas.
+        let red = Rgba([255, 0, 0, 255]);
+        let mut chunks = ChunkResults::with_grid_side(4);
+        for row in 0..4u8 {
+            for col in 0..4u8 {
+                chunks.add_success(row, col, solid_jpeg(red));
+            }
+        }
+
+        let result = assemble_chunks(chunks).unwrap();
+        assert_eq!(result.width(), TILE_SIZE);
+        assert_eq!(result.height(), TILE_SIZE);
+
+        // Center pixel is red content (JPEG is lossy), definitively not magenta.
+        let p = result.get_pixel(TILE_SIZE / 2, TILE_SIZE / 2);
+        assert!(p[0] > 200, "red channel: {:?}", p);
+        assert!(p[1] < 60, "green channel: {:?}", p);
+        assert!(p[2] < 60, "blue channel (magenta would be high): {:?}", p);
+    }
+
+    #[test]
+    fn test_assemble_native_grid_stays_full_size() {
+        // grid_side 16 takes the no-upscale path and yields a 4096² tile.
+        let chunks = ChunkResults::with_grid_side(16);
+        let result = assemble_chunks(chunks).unwrap();
+        assert_eq!(result.width(), TILE_SIZE);
+        assert_eq!(result.height(), TILE_SIZE);
     }
 
     // ------------------------------------------------------------------

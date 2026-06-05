@@ -189,6 +189,7 @@ pub fn run(args: RunArgs) -> Result<(), CliError> {
         .cache_disk_size(config.cache.disk_size)
         .generation_threads(config.generation.threads)
         .generation_timeout(config.generation.timeout)
+        .generation_max_source_zoom(config.generation.source_zoom_cap())
         .pipeline(pipeline_settings)
         .control_plane(control_plane_settings)
         .quiet_mode(use_tui) // Disable stats logging when TUI is active

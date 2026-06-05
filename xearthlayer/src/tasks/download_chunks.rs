@@ -208,45 +208,84 @@ where
     P: ChunkProvider,
     D: DiskCache,
 {
-    let mut results = ChunkResults::new();
+    // Resolve the source sampling grid. When `max_source_zoom` caps the
+    // requested zoom, the same geographic box is fetched at a lower zoom as a
+    // smaller `grid_side × grid_side` block (to be upscaled during assembly).
+    // When uncapped, this is the native 16×16 grid and behaviour is unchanged.
+    let grid = tile.source_grid(config.max_source_zoom);
+    let source_tile = TileCoord {
+        row: grid.origin_chunk_row / crate::coord::CHUNKS_PER_TILE_SIDE,
+        col: grid.origin_chunk_col / crate::coord::CHUNKS_PER_TILE_SIDE,
+        zoom: grid.source_zoom,
+    };
+    // Offset of the block's top-left chunk within its (single) source tile. The
+    // power-of-two alignment of `source_grid` guarantees the whole block fits
+    // inside one source tile, so these are constant for the tile.
+    let off_row = (grid.origin_chunk_row % crate::coord::CHUNKS_PER_TILE_SIDE) as u8;
+    let off_col = (grid.origin_chunk_col % crate::coord::CHUNKS_PER_TILE_SIDE) as u8;
+    let grid_side = grid.grid_side as u8;
+
+    if !grid.is_native() {
+        debug!(
+            tile = ?tile,
+            source_zoom = grid.source_zoom,
+            grid_side = grid.grid_side,
+            upscale_factor = grid.upscale_factor,
+            "Source zoom capped: fetching reduced grid to upscale"
+        );
+    }
+
+    let mut results = ChunkResults::with_grid_side(grid.grid_side);
     let mut downloads = JoinSet::new();
 
     // Use the SHARED semaphore from config - this limits HTTP requests across
     // ALL concurrent tile downloads, not just within this single tile.
     let semaphore = Arc::clone(&config.http_semaphore);
 
-    // Spawn download tasks for all 256 chunks
-    for chunk in tile.chunks() {
-        let provider = Arc::clone(&provider);
-        let disk_cache = Arc::clone(&disk_cache);
-        let timeout = config.request_timeout;
-        let max_retries = config.max_retries;
-        let sem = Arc::clone(&semaphore);
-        let chunk_metrics = metrics.clone();
+    // Spawn one download per chunk in the source grid (grid_side² chunks). Each
+    // fetches/caches under the SOURCE tile's coords (so capped tiles sharing a
+    // source chunk dedupe in the chunk cache); the result's source within-tile
+    // position is remapped to the assembly grid position on collection.
+    for i in 0..grid_side {
+        for j in 0..grid_side {
+            let provider = Arc::clone(&provider);
+            let disk_cache = Arc::clone(&disk_cache);
+            let timeout = config.request_timeout;
+            let max_retries = config.max_retries;
+            let sem = Arc::clone(&semaphore);
+            let chunk_metrics = metrics.clone();
+            let src_row = off_row + i;
+            let src_col = off_col + j;
 
-        downloads.spawn(async move {
-            // Acquire semaphore permit before starting download
-            let _permit = sem.acquire().await.expect("semaphore closed unexpectedly");
+            downloads.spawn(async move {
+                // Acquire semaphore permit before starting download
+                let _permit = sem.acquire().await.expect("semaphore closed unexpectedly");
 
-            download_chunk_with_cache(
-                tile,
-                chunk.chunk_row,
-                chunk.chunk_col,
-                provider,
-                disk_cache,
-                timeout,
-                max_retries,
-                chunk_metrics,
-            )
-            .await
-        });
+                download_chunk_with_cache(
+                    source_tile,
+                    src_row,
+                    src_col,
+                    provider,
+                    disk_cache,
+                    timeout,
+                    max_retries,
+                    chunk_metrics,
+                )
+                .await
+            });
+        }
     }
 
-    // Collect results as they complete
+    // Collect results as they complete, remapping source within-tile coords
+    // (`off + index`) back to assembly grid positions (`0..grid_side`).
     while let Some(result) = downloads.join_next().await {
         match result {
             Ok(Ok(chunk_data)) => {
-                results.add_success(chunk_data.row, chunk_data.col, chunk_data.data);
+                results.add_success(
+                    chunk_data.row - off_row,
+                    chunk_data.col - off_col,
+                    chunk_data.data,
+                );
             }
             Ok(Err(chunk_err)) => {
                 warn!(
@@ -256,8 +295,8 @@ where
                     "Chunk download failed"
                 );
                 results.add_failure(
-                    chunk_err.row,
-                    chunk_err.col,
+                    chunk_err.row - off_row,
+                    chunk_err.col - off_col,
                     chunk_err.attempts,
                     chunk_err.error,
                 );
@@ -477,6 +516,9 @@ fn spawn_cache_write<D>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::coord::TileCoord;
+    use crate::executor::ChunkDownloadError;
+    use std::sync::Mutex;
 
     #[test]
     fn test_task_name() {
@@ -486,5 +528,127 @@ mod tests {
     #[test]
     fn test_output_key() {
         assert_eq!(OUTPUT_KEY_CHUNKS, "chunks");
+    }
+
+    /// Provider that records every (row, col, zoom) requested and always succeeds.
+    struct RecordingProvider {
+        requested: Arc<Mutex<Vec<(u32, u32, u8)>>>,
+    }
+
+    impl ChunkProvider for RecordingProvider {
+        async fn download_chunk(
+            &self,
+            row: u32,
+            col: u32,
+            zoom: u8,
+        ) -> Result<Vec<u8>, ChunkDownloadError> {
+            self.requested.lock().unwrap().push((row, col, zoom));
+            Ok(vec![1, 2, 3])
+        }
+
+        fn name(&self) -> &str {
+            "recording"
+        }
+    }
+
+    /// Disk cache that always misses and discards writes.
+    struct NoopDiskCache;
+
+    impl DiskCache for NoopDiskCache {
+        async fn get(&self, _: u32, _: u32, _: u8, _: u8, _: u8) -> Option<Vec<u8>> {
+            None
+        }
+
+        async fn put(
+            &self,
+            _: u32,
+            _: u32,
+            _: u8,
+            _: u8,
+            _: u8,
+            _: Vec<u8>,
+        ) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    async fn run_download(tile: TileCoord, cap: Option<u8>) -> (ChunkResults, Vec<(u32, u32, u8)>) {
+        let requested = Arc::new(Mutex::new(Vec::new()));
+        let provider = Arc::new(RecordingProvider {
+            requested: Arc::clone(&requested),
+        });
+        let cache = Arc::new(NoopDiskCache);
+        let config = DownloadConfig::default().with_max_source_zoom(cap);
+        let results = download_all_chunks(tile, provider, cache, &config, None).await;
+        let coords = requested.lock().unwrap().clone();
+        (results, coords)
+    }
+
+    #[tokio::test]
+    async fn native_download_fetches_full_256_grid_at_chunk_zoom() {
+        // ZL18 tile: tile zoom 14, native chunk zoom 18.
+        let tile = TileCoord {
+            row: 1000,
+            col: 2000,
+            zoom: 14,
+        };
+        let (results, coords) = run_download(tile, None).await;
+
+        assert_eq!(results.grid_side(), 16);
+        assert_eq!(results.success_count(), 256);
+        assert!(results.is_complete());
+        // Native chunk zoom is tile zoom + 4 = ZL18.
+        assert_eq!(coords.len(), 256);
+        assert!(coords.iter().all(|&(_, _, z)| z == 18));
+    }
+
+    #[tokio::test]
+    async fn capped_download_fetches_reduced_grid_at_source_coords() {
+        // ZL18 tile (tile zoom 14) capped at ZL16: Δ2 -> 4×4 grid at chunk zoom 16.
+        let tile = TileCoord {
+            row: 1000,
+            col: 2000,
+            zoom: 14,
+        };
+        let (results, coords) = run_download(tile, Some(16)).await;
+
+        assert_eq!(results.grid_side(), 4);
+        assert_eq!(results.success_count(), 16);
+        assert!(results.is_complete());
+
+        assert_eq!(coords.len(), 16);
+        assert!(coords.iter().all(|&(_, _, z)| z == 16), "source chunk zoom");
+
+        // Geographic origin: native chunk origin (row*16) shifted down two levels.
+        let exp_row0 = (1000 * 16) >> 2; // 4000
+        let exp_col0 = (2000 * 16) >> 2; // 8000
+        let mut rows: Vec<u32> = coords.iter().map(|&(r, _, _)| r).collect();
+        rows.sort_unstable();
+        rows.dedup();
+        let mut cols: Vec<u32> = coords.iter().map(|&(_, c, _)| c).collect();
+        cols.sort_unstable();
+        cols.dedup();
+        assert_eq!(
+            rows,
+            vec![exp_row0, exp_row0 + 1, exp_row0 + 2, exp_row0 + 3]
+        );
+        assert_eq!(
+            cols,
+            vec![exp_col0, exp_col0 + 1, exp_col0 + 2, exp_col0 + 3]
+        );
+    }
+
+    #[tokio::test]
+    async fn cap_at_or_above_requested_zoom_is_native() {
+        // A ZL16 tile (tile zoom 12) under a cap of ZL17 must download natively.
+        let tile = TileCoord {
+            row: 12754,
+            col: 5279,
+            zoom: 12,
+        };
+        let (results, coords) = run_download(tile, Some(17)).await;
+        assert_eq!(results.grid_side(), 16);
+        assert_eq!(results.success_count(), 256);
+        assert!(coords.iter().all(|&(_, _, z)| z == 16)); // native ZL16
     }
 }

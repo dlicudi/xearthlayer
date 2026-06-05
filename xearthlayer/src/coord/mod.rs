@@ -6,8 +6,8 @@
 mod types;
 
 pub use types::{
-    ChunkCoord, CoordError, TileChunksIterator, TileCoord, CHUNKS_PER_TILE_SIDE, CHUNK_ZOOM_OFFSET,
-    MAX_LAT, MAX_ZOOM, MIN_LAT, MIN_LON, MIN_ZOOM,
+    ChunkCoord, CoordError, SourceGrid, TileChunksIterator, TileCoord, CHUNKS_PER_TILE_SIDE,
+    CHUNK_ZOOM_OFFSET, MAX_LAT, MAX_SOURCE_DOWNSAMPLE, MAX_ZOOM, MIN_LAT, MIN_LON, MIN_ZOOM,
 };
 
 /// Format a DSF-style directory name from integer lat/lon.

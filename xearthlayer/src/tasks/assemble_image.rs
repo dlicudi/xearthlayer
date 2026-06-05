@@ -28,7 +28,6 @@ use tracing::{debug, warn, Instrument};
 /// Tile dimensions
 const TILE_SIZE: u32 = 4096;
 const CHUNK_SIZE: u32 = 256;
-const CHUNKS_PER_SIDE: u32 = 16;
 
 /// Magenta color for failed chunks (R=255, G=0, B=255, A=255)
 const MAGENTA: Rgba<u8> = Rgba([255, 0, 255, 255]);
@@ -163,12 +162,18 @@ pub fn get_image_from_output(output: &TaskOutput) -> Option<&RgbaImage> {
 // ============================================================================
 
 /// Synchronous chunk assembly (runs in spawn_blocking).
+///
+/// Builds a `grid_side × grid_side` chunk canvas and upscales it to the full
+/// 4096×4096 tile when the grid was capped below native (Lanczos3). Native 16×16
+/// grids are already full-size and skip scaling.
 fn assemble_chunks(chunks: ChunkResults) -> Result<RgbaImage, String> {
-    let mut canvas = RgbaImage::new(TILE_SIZE, TILE_SIZE);
+    let grid_side = chunks.grid_side();
+    let canvas_size = grid_side * CHUNK_SIZE;
+    let mut canvas = RgbaImage::new(canvas_size, canvas_size);
 
     // Process each chunk position
-    for row in 0..CHUNKS_PER_SIDE as u8 {
-        for col in 0..CHUNKS_PER_SIDE as u8 {
+    for row in 0..grid_side as u8 {
+        for col in 0..grid_side as u8 {
             let x_offset = col as u32 * CHUNK_SIZE;
             let y_offset = row as u32 * CHUNK_SIZE;
 
@@ -194,6 +199,16 @@ fn assemble_chunks(chunks: ChunkResults) -> Result<RgbaImage, String> {
                 fill_magenta(&mut canvas, x_offset, y_offset);
             }
         }
+    }
+
+    // Upscale a capped grid to the full tile size X-Plane expects (no-op native).
+    if canvas_size != TILE_SIZE {
+        canvas = image::imageops::resize(
+            &canvas,
+            TILE_SIZE,
+            TILE_SIZE,
+            image::imageops::FilterType::Lanczos3,
+        );
     }
 
     Ok(canvas)

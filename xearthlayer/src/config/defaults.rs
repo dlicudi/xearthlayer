@@ -156,6 +156,11 @@ pub const DEFAULT_DOWNLOAD_TIMEOUT_SECS: u64 = 30;
 /// Default generation timeout in seconds.
 pub const DEFAULT_GENERATION_TIMEOUT_SECS: u64 = 10;
 
+/// Default source-zoom cap (ZL). Tiles requested above this are fetched at this
+/// zoom and upscaled. 17 keeps the common ZL16 baseline native while relieving
+/// heavier ZL18 detail zones ~4x. `0` would disable the cap entirely.
+pub const DEFAULT_MAX_SOURCE_ZOOM: u8 = 17;
+
 // =============================================================================
 // Prefetch defaults
 // =============================================================================
@@ -360,6 +365,7 @@ impl Default for ConfigFile {
             generation: GenerationSettings {
                 threads: (num_cpus() / 2).max(2),
                 timeout: DEFAULT_GENERATION_TIMEOUT_SECS,
+                max_source_zoom: DEFAULT_MAX_SOURCE_ZOOM,
             },
             pipeline: PipelineSettings {
                 max_http_concurrent: default_http_concurrent(),

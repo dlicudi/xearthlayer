@@ -65,6 +65,14 @@ pub struct DownloadConfig {
     ///
     /// Default capacity: 1024 permits
     pub http_semaphore: Arc<Semaphore>,
+
+    /// Optional cap on the imagery zoom actually downloaded.
+    ///
+    /// `None` (default) downloads every tile at its requested zoom. `Some(z)`
+    /// fetches tiles requested above `z` at zoom `z` as a smaller chunk grid,
+    /// to be upscaled during assembly. See [`crate::coord::TileCoord::source_grid`].
+    /// The `0`-means-disabled config convention is mapped to `None` by the caller.
+    pub max_source_zoom: Option<u8>,
 }
 
 impl Default for DownloadConfig {
@@ -73,6 +81,7 @@ impl Default for DownloadConfig {
             request_timeout: Duration::from_secs(DEFAULT_REQUEST_TIMEOUT_SECS),
             max_retries: DEFAULT_MAX_RETRIES,
             http_semaphore: Arc::new(Semaphore::new(DEFAULT_MAX_CONCURRENT_HTTP)),
+            max_source_zoom: None,
         }
     }
 }
@@ -86,6 +95,7 @@ impl DownloadConfig {
             request_timeout,
             max_retries,
             http_semaphore: Arc::new(Semaphore::new(DEFAULT_MAX_CONCURRENT_HTTP)),
+            max_source_zoom: None,
         }
     }
 
@@ -102,6 +112,7 @@ impl DownloadConfig {
             request_timeout,
             max_retries,
             http_semaphore,
+            max_source_zoom: None,
         }
     }
 
@@ -126,6 +137,12 @@ impl DownloadConfig {
         self
     }
 
+    /// Sets the source-zoom cap (see [`DownloadConfig::max_source_zoom`]).
+    pub fn with_max_source_zoom(mut self, max_source_zoom: Option<u8>) -> Self {
+        self.max_source_zoom = max_source_zoom;
+        self
+    }
+
     /// Returns the HTTP semaphore capacity.
     pub fn http_capacity(&self) -> usize {
         self.http_semaphore.available_permits()
@@ -147,10 +164,13 @@ impl std::fmt::Debug for DownloadConfig {
 
 impl From<&crate::config::ExecutorSettings> for DownloadConfig {
     fn from(settings: &crate::config::ExecutorSettings) -> Self {
+        // The source-zoom cap lives in GenerationSettings, not ExecutorSettings;
+        // callers that have it set it via `with_max_source_zoom`.
         Self {
             request_timeout: Duration::from_secs(settings.request_timeout_secs),
             max_retries: settings.max_retries,
             http_semaphore: Arc::new(Semaphore::new(DEFAULT_MAX_CONCURRENT_HTTP)),
+            max_source_zoom: None,
         }
     }
 }

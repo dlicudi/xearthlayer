@@ -25,8 +25,8 @@ use crate::cache::adapters::{DdsDiskCacheBridge, DiskCacheBridge, MemoryCacheBri
 use crate::cache::MemoryCache;
 use crate::dds::DdsFormat;
 use crate::executor::{
-    AsyncProviderAdapter, DiskCacheAdapter, ExecutorCacheAdapter, NullDdsDiskCache, NullDiskCache,
-    TextureEncoderAdapter, TokioExecutor,
+    AsyncProviderAdapter, DiskCacheAdapter, DownloadConfig, ExecutorCacheAdapter, NullDdsDiskCache,
+    NullDiskCache, TextureEncoderAdapter, TokioExecutor,
 };
 use crate::jobs::DefaultDdsJobFactory;
 use crate::metrics::MetricsClient;
@@ -63,6 +63,9 @@ pub struct RuntimeBuilder {
     runtime_handle: Option<tokio::runtime::Handle>,
     /// Metrics client for event-based telemetry
     metrics_client: Option<MetricsClient>,
+    /// Source-zoom cap for the download grid (`None` = native). When set, tiles
+    /// requested above this zoom are fetched at this zoom and upscaled.
+    max_source_zoom: Option<u8>,
 }
 
 impl RuntimeBuilder {
@@ -88,6 +91,7 @@ impl RuntimeBuilder {
             config: RuntimeConfig::default(),
             runtime_handle: None,
             metrics_client: None,
+            max_source_zoom: None,
         }
     }
 
@@ -115,6 +119,15 @@ impl RuntimeBuilder {
     /// Sets the runtime configuration.
     pub fn with_config(mut self, config: RuntimeConfig) -> Self {
         self.config = config;
+        self
+    }
+
+    /// Sets the source-zoom cap applied to chunk downloads.
+    ///
+    /// `None` (default) downloads every tile at its requested zoom. `Some(z)`
+    /// fetches tiles requested above `z` at zoom `z` and upscales them.
+    pub fn with_max_source_zoom(mut self, max_source_zoom: Option<u8>) -> Self {
+        self.max_source_zoom = max_source_zoom;
         self
     }
 
@@ -174,6 +187,7 @@ impl RuntimeBuilder {
             Arc::clone(&self.encoder),
             Arc::clone(&cache_adapter),
             disk_cache,
+            self.max_source_zoom,
         );
 
         let null_dds_disk = Arc::new(NullDdsDiskCache);
@@ -219,6 +233,7 @@ impl RuntimeBuilder {
             async_provider,
             Arc::clone(&self.encoder),
             Arc::clone(&cache_adapter),
+            self.max_source_zoom,
         );
 
         let null_dds_disk = Arc::new(NullDdsDiskCache);
@@ -238,6 +253,7 @@ impl RuntimeBuilder {
         encoder: Arc<DdsTextureEncoder>,
         cache_adapter: Arc<ExecutorCacheAdapter>,
         disk_cache: Arc<DiskCacheAdapter>,
+        max_source_zoom: Option<u8>,
     ) -> Arc<
         DefaultDdsJobFactory<
             ProviderAdapter,
@@ -253,13 +269,14 @@ impl RuntimeBuilder {
         let dds_disk_cache = Arc::new(NullDdsDiskCache);
         let executor = Arc::new(TokioExecutor::new());
 
-        Arc::new(DefaultDdsJobFactory::new(
+        Arc::new(DefaultDdsJobFactory::with_config(
             provider_adapter,
             encoder_adapter,
             cache_adapter,
             dds_disk_cache,
             disk_cache,
             executor,
+            DownloadConfig::default().with_max_source_zoom(max_source_zoom),
         ))
     }
 
@@ -268,6 +285,7 @@ impl RuntimeBuilder {
         async_provider: Arc<AsyncProviderType>,
         encoder: Arc<DdsTextureEncoder>,
         cache_adapter: Arc<ExecutorCacheAdapter>,
+        max_source_zoom: Option<u8>,
     ) -> Arc<
         DefaultDdsJobFactory<
             ProviderAdapter,
@@ -284,13 +302,14 @@ impl RuntimeBuilder {
         let disk_cache = Arc::new(NullDiskCache);
         let executor = Arc::new(TokioExecutor::new());
 
-        Arc::new(DefaultDdsJobFactory::new(
+        Arc::new(DefaultDdsJobFactory::with_config(
             provider_adapter,
             encoder_adapter,
             cache_adapter,
             dds_disk_cache,
             disk_cache,
             executor,
+            DownloadConfig::default().with_max_source_zoom(max_source_zoom),
         ))
     }
 
@@ -343,6 +362,7 @@ impl RuntimeBuilder {
             Arc::clone(&memory_bridge),
             dds_disk_bridge,
             disk_bridge,
+            self.max_source_zoom,
         );
 
         XEarthLayerRuntime::with_metrics_client(
@@ -362,6 +382,7 @@ impl RuntimeBuilder {
         memory_bridge: Arc<MemoryCacheBridge>,
         dds_disk_bridge: Arc<DdsDiskCacheBridge>,
         disk_bridge: Arc<DiskCacheBridge>,
+        max_source_zoom: Option<u8>,
     ) -> Arc<
         DefaultDdsJobFactory<
             ProviderAdapter,
@@ -376,13 +397,14 @@ impl RuntimeBuilder {
         let encoder_adapter = Arc::new(TextureEncoderAdapter::new(encoder));
         let executor = Arc::new(TokioExecutor::new());
 
-        Arc::new(DefaultDdsJobFactory::new(
+        Arc::new(DefaultDdsJobFactory::with_config(
             provider_adapter,
             encoder_adapter,
             memory_bridge,
             dds_disk_bridge,
             disk_bridge,
             executor,
+            DownloadConfig::default().with_max_source_zoom(max_source_zoom),
         ))
     }
 }

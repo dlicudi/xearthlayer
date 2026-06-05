@@ -170,6 +170,29 @@ pub(super) fn parse_ini(ini: &Ini) -> Result<ConfigFile, ConfigFileError> {
                 reason: "must be a positive integer (seconds)".to_string(),
             })?;
         }
+        if let Some(v) = section.get("max_source_zoom") {
+            let zoom: u8 = v.parse().map_err(|_| ConfigFileError::InvalidValue {
+                section: "generation".to_string(),
+                key: "max_source_zoom".to_string(),
+                value: v.to_string(),
+                reason: format!(
+                    "must be an integer between 0 and {}",
+                    crate::coord::MAX_ZOOM
+                ),
+            })?;
+            if zoom > crate::coord::MAX_ZOOM {
+                return Err(ConfigFileError::InvalidValue {
+                    section: "generation".to_string(),
+                    key: "max_source_zoom".to_string(),
+                    value: v.to_string(),
+                    reason: format!(
+                        "must be an integer between 0 and {}",
+                        crate::coord::MAX_ZOOM
+                    ),
+                });
+            }
+            config.generation.max_source_zoom = zoom;
+        }
     }
 
     // [pipeline] section
