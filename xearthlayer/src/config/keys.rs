@@ -121,6 +121,7 @@ pub enum ConfigKey {
     // FUSE settings
     FuseMaxBackground,
     FuseCongestionThreshold,
+    FuseAttrTtlSecs,
 }
 
 impl FromStr for ConfigKey {
@@ -203,6 +204,7 @@ impl FromStr for ConfigKey {
             // FUSE settings
             "fuse.max_background" => Ok(ConfigKey::FuseMaxBackground),
             "fuse.congestion_threshold" => Ok(ConfigKey::FuseCongestionThreshold),
+            "fuse.attr_ttl_secs" => Ok(ConfigKey::FuseAttrTtlSecs),
 
             _ => Err(ConfigKeyError::UnknownKey(s.to_string())),
         }
@@ -277,6 +279,7 @@ impl ConfigKey {
             // FUSE settings
             ConfigKey::FuseMaxBackground => "fuse.max_background",
             ConfigKey::FuseCongestionThreshold => "fuse.congestion_threshold",
+            ConfigKey::FuseAttrTtlSecs => "fuse.attr_ttl_secs",
         }
     }
 
@@ -423,6 +426,7 @@ impl ConfigKey {
             // FUSE settings
             ConfigKey::FuseMaxBackground => config.fuse.max_background.to_string(),
             ConfigKey::FuseCongestionThreshold => config.fuse.congestion_threshold.to_string(),
+            ConfigKey::FuseAttrTtlSecs => config.fuse.attr_ttl_secs.to_string(),
         }
     }
 
@@ -616,6 +620,9 @@ impl ConfigKey {
             ConfigKey::FuseCongestionThreshold => {
                 config.fuse.congestion_threshold = value.parse().unwrap();
             }
+            ConfigKey::FuseAttrTtlSecs => {
+                config.fuse.attr_ttl_secs = value.parse().unwrap();
+            }
         }
     }
 
@@ -703,6 +710,8 @@ impl ConfigKey {
             // FUSE settings — range: 1-1024 for both
             ConfigKey::FuseMaxBackground => Box::new(IntegerRangeSpec::new(1, 1024)),
             ConfigKey::FuseCongestionThreshold => Box::new(IntegerRangeSpec::new(1, 1024)),
+            // 0 disables caching; cap well above any sane session length.
+            ConfigKey::FuseAttrTtlSecs => Box::new(IntegerRangeSpec::new(0, 86_400)),
         }
     }
 
@@ -770,6 +779,7 @@ impl ConfigKey {
             // FUSE settings
             ConfigKey::FuseMaxBackground,
             ConfigKey::FuseCongestionThreshold,
+            ConfigKey::FuseAttrTtlSecs,
         ]
     }
 }

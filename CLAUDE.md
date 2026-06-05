@@ -364,7 +364,7 @@ Key sections:
 - `[prefetch]` - Boundary-driven prefetch, web_api_port (default 8086), calibration, transition ramp
 - `[prewarm]` - Cold-start cache warming (grid_rows/grid_cols for DSF tile grid around airport)
 - `[executor]` - Resource pool capacities (network, CPU, disk I/O), job limits, retry behavior
-- `[fuse]` - FUSE kernel limits (max_background, congestion_threshold)
+- `[fuse]` - FUSE kernel limits (max_background, congestion_threshold) and entry/attr cache TTL (`attr_ttl_secs`: long TTL avoids readdir/lookup churn on the read-only ortho mount; 0 disables)
 - `[packages]` - Package manager settings (concurrent_downloads: parallel part downloads 1-10)
 
 See `docs/configuration.md` for full reference.

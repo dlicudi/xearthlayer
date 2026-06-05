@@ -500,17 +500,24 @@ Controls Linux FUSE kernel parameters for concurrent background request limits. 
 |---------|---------|-------|-------------|
 | `max_background` | 256 | 1-1024 | Maximum pending background FUSE requests before the kernel queues them |
 | `congestion_threshold` | 192 | 1-1024 | Kernel starts throttling when pending requests exceed this (convention: 75% of max_background) |
+| `attr_ttl_secs` | 3600 | 0-86400 | How long the kernel caches directory entries / file attributes before re-validating. `0` disables caching. |
 
 **When to modify:**
-- If you experience sim freezes at DSF boundaries, try increasing both values
+- If you experience sim freezes at DSF boundaries, try increasing `max_background`/`congestion_threshold`
 - If system memory is very limited, you might reduce them (but the defaults are recommended)
 - `congestion_threshold` should always be less than `max_background`
+
+**`attr_ttl_secs` (entry/attribute cache TTL):**
+- The ortho mount is effectively read-only during a session — directory listings are fixed and virtual DDS attributes are constant — so the kernel can safely trust its cache for a long time.
+- A short TTL makes the kernel re-validate constantly, driving a storm of `readdir`/`lookup`/`getattr` requests under X-Plane's scenery scanner. Under load some of those FUSE replies land late and are dropped (`EINVAL`, logged as "dropping a failed fuse reply"). The high default (1 hour) collapses that churn.
+- Lower it only if you hot-swap scenery files while XEL is running and need the mount to notice sooner. `0` disables entry/attr caching entirely (re-validates every request — not recommended).
 
 **Example:**
 ```ini
 [fuse]
 max_background = 256
 congestion_threshold = 192
+attr_ttl_secs = 3600
 ```
 
 ## Complete Example
@@ -601,6 +608,7 @@ enabled = true
 ; The Linux kernel default of 12/9 causes X-Plane freezes at DSF boundaries
 max_background = 256
 congestion_threshold = 192
+attr_ttl_secs = 3600
 ```
 
 ## Config CLI Commands

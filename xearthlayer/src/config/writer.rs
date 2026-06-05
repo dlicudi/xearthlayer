@@ -268,6 +268,11 @@ max_background = {}
 ; Congestion threshold for background FUSE requests (default: 192, range: 1-1024)
 ; Kernel starts throttling when pending requests exceed this. Convention: 75% of max_background.
 congestion_threshold = {}
+; Entry/attribute cache TTL in seconds (default: 3600, range: 0-86400)
+; How long the kernel trusts directory entries / file attrs before re-validating.
+; The ortho mount is read-only per session, so a long TTL avoids a readdir/lookup
+; storm (and dropped FUSE replies). 0 disables caching (re-validates constantly).
+attr_ttl_secs = {}
 "#,
         update_check,
         config.provider.provider_type,
@@ -329,6 +334,7 @@ congestion_threshold = {}
         // FUSE settings
         config.fuse.max_background,
         config.fuse.congestion_threshold,
+        config.fuse.attr_ttl_secs,
     )
 }
 

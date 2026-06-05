@@ -11,7 +11,9 @@ use std::time::Duration;
 
 use tokio::sync::mpsc;
 
-use crate::config::defaults::{DEFAULT_FUSE_CONGESTION_THRESHOLD, DEFAULT_FUSE_MAX_BACKGROUND};
+use crate::config::defaults::{
+    DEFAULT_FUSE_ATTR_TTL_SECS, DEFAULT_FUSE_CONGESTION_THRESHOLD, DEFAULT_FUSE_MAX_BACKGROUND,
+};
 use crate::config::DiskIoProfile;
 use crate::executor::StorageConcurrencyLimiter;
 use crate::fuse::fuse3::Fuse3OrthoUnionFS;
@@ -167,6 +169,8 @@ pub struct MountManager {
     fuse_max_background: u16,
     /// Congestion threshold for background FUSE requests (kernel limit).
     fuse_congestion_threshold: u16,
+    /// Entry/attr cache TTL in seconds for the ortho mount.
+    fuse_attr_ttl_secs: u64,
 }
 
 impl MountManager {
@@ -190,6 +194,7 @@ impl MountManager {
             geo_index: None,
             fuse_max_background: DEFAULT_FUSE_MAX_BACKGROUND,
             fuse_congestion_threshold: DEFAULT_FUSE_CONGESTION_THRESHOLD,
+            fuse_attr_ttl_secs: DEFAULT_FUSE_ATTR_TTL_SECS,
         }
     }
 
@@ -208,9 +213,15 @@ impl MountManager {
     /// These control how many concurrent background requests the Linux kernel
     /// allows before throttling FUSE operations. Higher values prevent X-Plane
     /// sim freezes at DSF boundaries.
-    pub fn set_fuse_limits(&mut self, max_background: u16, congestion_threshold: u16) {
+    pub fn set_fuse_limits(
+        &mut self,
+        max_background: u16,
+        congestion_threshold: u16,
+        attr_ttl_secs: u64,
+    ) {
         self.fuse_max_background = max_background;
         self.fuse_congestion_threshold = congestion_threshold;
+        self.fuse_attr_ttl_secs = attr_ttl_secs;
     }
 
     /// Get the number of active mounts.
@@ -475,7 +486,8 @@ impl MountManager {
                 .with_geo_index(Arc::clone(&geo_index))
                 .with_dds_access_channel(dds_access_tx)
                 .with_scene_tracker_channel(scene_tracker_tx)
-                .with_fuse_limits(self.fuse_max_background, self.fuse_congestion_threshold);
+                .with_fuse_limits(self.fuse_max_background, self.fuse_congestion_threshold)
+                .with_attr_ttl(std::time::Duration::from_secs(self.fuse_attr_ttl_secs));
 
         // Wire metrics client for coalesced request tracking
         if let Some(metrics) = service.metrics_client() {

@@ -144,6 +144,9 @@ pub struct FuseConfig {
 
     /// Congestion threshold for background FUSE requests.
     pub congestion_threshold: u16,
+
+    /// Entry/attr cache TTL in seconds for the ortho mount.
+    pub attr_ttl_secs: u64,
 }
 
 impl OrchestratorConfig {
@@ -214,6 +217,7 @@ impl OrchestratorConfig {
         let fuse = FuseConfig {
             max_background: config.fuse.max_background,
             congestion_threshold: config.fuse.congestion_threshold,
+            attr_ttl_secs: config.fuse.attr_ttl_secs,
         };
 
         Self {

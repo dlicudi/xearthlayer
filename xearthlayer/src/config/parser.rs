@@ -671,6 +671,14 @@ pub(super) fn parse_ini(ini: &Ini) -> Result<ConfigFile, ConfigFileError> {
                     reason: "must be a positive integer (1-1024)".to_string(),
                 })?;
         }
+        if let Some(v) = section.get("attr_ttl_secs") {
+            config.fuse.attr_ttl_secs = v.parse().map_err(|_| ConfigFileError::InvalidValue {
+                section: "fuse".to_string(),
+                key: "attr_ttl_secs".to_string(),
+                value: v.to_string(),
+                reason: "must be a non-negative integer (seconds)".to_string(),
+            })?;
+        }
     }
 
     Ok(config)

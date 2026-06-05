@@ -354,6 +354,13 @@ pub struct FuseSettings {
     /// Kernel starts throttling when pending requests exceed this.
     /// Default: 192 (75% of max_background)
     pub congestion_threshold: u16,
+    /// Entry/attribute cache TTL in seconds for the ortho mount.
+    ///
+    /// How long the kernel trusts a directory entry / file attribute before
+    /// re-validating. The ortho mount is read-only during a session, so a long
+    /// TTL collapses the readdir/lookup/getattr re-validation traffic (and the
+    /// dropped FUSE replies it causes). Default: 3600.
+    pub attr_ttl_secs: u64,
 }
 
 #[cfg(test)]

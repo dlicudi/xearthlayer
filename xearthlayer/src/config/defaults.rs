@@ -263,6 +263,11 @@ pub const DEFAULT_FUSE_MAX_BACKGROUND: u16 = 256;
 /// Set to 75% of `max_background` as per kernel convention.
 pub const DEFAULT_FUSE_CONGESTION_THRESHOLD: u16 = DEFAULT_FUSE_MAX_BACKGROUND * 3 / 4; // 192
 
+/// Default FUSE entry/attr cache TTL in seconds for the ortho mount.
+/// 1 hour: the mount is read-only per session, so re-validating sooner only
+/// generates readdir/lookup churn (and dropped replies). 0 disables caching.
+pub const DEFAULT_FUSE_ATTR_TTL_SECS: u64 = 3600;
+
 // =============================================================================
 // Control plane defaults
 // =============================================================================
@@ -435,6 +440,7 @@ impl Default for ConfigFile {
             fuse: FuseSettings {
                 max_background: DEFAULT_FUSE_MAX_BACKGROUND,
                 congestion_threshold: DEFAULT_FUSE_CONGESTION_THRESHOLD,
+                attr_ttl_secs: DEFAULT_FUSE_ATTR_TTL_SECS,
             },
         }
     }

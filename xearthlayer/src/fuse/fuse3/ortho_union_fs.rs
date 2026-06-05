@@ -165,6 +165,14 @@ pub struct Fuse3OrthoUnionFS {
     /// Congestion threshold for background FUSE requests (kernel limit).
     /// When set, overrides the kernel default (9) in the FUSE init handshake.
     fuse_congestion_threshold: Option<u16>,
+    /// Entry/attr cache TTL returned to the kernel on lookup/getattr/readdirplus.
+    ///
+    /// The ortho mount is effectively read-only during a session (fixed `.ter`
+    /// listings, constant virtual DDS attrs), so a long TTL lets the kernel cache
+    /// the directory tree instead of re-validating every second — which otherwise
+    /// drives a storm of `readdir`/`lookup`/`getattr` requests (and dropped
+    /// replies) under X-Plane's scenery scanner. Defaults to [`TTL`].
+    cache_ttl: Duration,
 }
 
 impl Fuse3OrthoUnionFS {
@@ -215,6 +223,7 @@ impl Fuse3OrthoUnionFS {
             metrics_client: None,
             fuse_max_background: None,
             fuse_congestion_threshold: None,
+            cache_ttl: TTL,
         }
     }
 
@@ -246,6 +255,7 @@ impl Fuse3OrthoUnionFS {
             metrics_client: None,
             fuse_max_background: None,
             fuse_congestion_threshold: None,
+            cache_ttl: TTL,
         }
     }
 
@@ -347,6 +357,16 @@ impl Fuse3OrthoUnionFS {
     pub fn with_fuse_limits(mut self, max_background: u16, congestion_threshold: u16) -> Self {
         self.fuse_max_background = Some(max_background);
         self.fuse_congestion_threshold = Some(congestion_threshold);
+        self
+    }
+
+    /// Set the entry/attr cache TTL the kernel uses before re-validating.
+    ///
+    /// The ortho mount is read-only during a session, so a long TTL collapses the
+    /// `readdir`/`lookup`/`getattr` re-validation traffic that otherwise floods
+    /// the FUSE channel. See [`Fuse3OrthoUnionFS::attr_ttl`].
+    pub fn with_attr_ttl(mut self, attr_ttl: Duration) -> Self {
+        self.cache_ttl = attr_ttl;
         self
     }
 
@@ -564,7 +584,7 @@ impl Filesystem for Fuse3OrthoUnionFS {
                 let inode = self.inode_manager.get_or_create_inode(&child_path);
                 let attr = self.metadata_to_attr(inode, &metadata);
                 return Ok(ReplyEntry {
-                    ttl: TTL,
+                    ttl: self.cache_ttl,
                     attr,
                     generation: 0,
                 });
@@ -576,7 +596,7 @@ impl Filesystem for Fuse3OrthoUnionFS {
             let inode = self.inode_manager.get_or_create_inode(&child_path);
             let attr = self.virtual_dir_attr(inode);
             return Ok(ReplyEntry {
-                ttl: TTL,
+                ttl: self.cache_ttl,
                 attr,
                 generation: 0,
             });
@@ -594,7 +614,7 @@ impl Filesystem for Fuse3OrthoUnionFS {
                 let inode = self.inode_manager.get_or_create_inode(&child_path);
                 let attr = self.metadata_to_attr(inode, &metadata);
                 return Ok(ReplyEntry {
-                    ttl: TTL,
+                    ttl: self.cache_ttl,
                     attr,
                     generation: 0,
                 });
@@ -623,7 +643,7 @@ impl Filesystem for Fuse3OrthoUnionFS {
                 let inode = self.inode_manager.create_virtual_inode(coords);
                 let attr = self.virtual_dds_attr(inode);
                 return Ok(ReplyEntry {
-                    ttl: TTL,
+                    ttl: self.cache_ttl,
                     attr,
                     generation: 0,
                 });
@@ -645,7 +665,7 @@ impl Filesystem for Fuse3OrthoUnionFS {
         // Root inode
         if ino == 1 {
             return Ok(ReplyAttr {
-                ttl: TTL,
+                ttl: self.cache_ttl,
                 attr: self.root_dir_attr(),
             });
         }
@@ -654,7 +674,10 @@ impl Filesystem for Fuse3OrthoUnionFS {
         if InodeManager::is_virtual_inode(ino) {
             if self.inode_manager.get_virtual_dds(ino).is_some() {
                 let attr = self.virtual_dds_attr(ino);
-                return Ok(ReplyAttr { ttl: TTL, attr });
+                return Ok(ReplyAttr {
+                    ttl: self.cache_ttl,
+                    attr,
+                });
             }
             return Err(Errno::from(libc::ENOENT));
         }
@@ -668,7 +691,10 @@ impl Filesystem for Fuse3OrthoUnionFS {
         // Check if it's a directory in the union
         if self.index.is_directory(&virtual_path) {
             let attr = self.virtual_dir_attr(ino);
-            return Ok(ReplyAttr { ttl: TTL, attr });
+            return Ok(ReplyAttr {
+                ttl: self.cache_ttl,
+                attr,
+            });
         }
 
         // Must be a real file - try index lookup first
@@ -677,7 +703,10 @@ impl Filesystem for Fuse3OrthoUnionFS {
                 .await
                 .map_err(|_| Errno::from(libc::ENOENT))?;
             let attr = self.metadata_to_attr(ino, &metadata);
-            return Ok(ReplyAttr { ttl: TTL, attr });
+            return Ok(ReplyAttr {
+                ttl: self.cache_ttl,
+                attr,
+            });
         }
 
         // Try lazy resolution for terrain/textures directories (geospatial-aware)
@@ -690,7 +719,10 @@ impl Filesystem for Fuse3OrthoUnionFS {
                 .await
                 .map_err(|_| Errno::from(libc::ENOENT))?;
             let attr = self.metadata_to_attr(ino, &metadata);
-            return Ok(ReplyAttr { ttl: TTL, attr });
+            return Ok(ReplyAttr {
+                ttl: self.cache_ttl,
+                attr,
+            });
         }
 
         Err(Errno::from(libc::ENOENT))
@@ -913,8 +945,8 @@ impl Filesystem for Fuse3OrthoUnionFS {
             name: OsString::from("."),
             offset: 1,
             attr: self.virtual_dir_attr(ino),
-            entry_ttl: TTL,
-            attr_ttl: TTL,
+            entry_ttl: self.cache_ttl,
+            attr_ttl: self.cache_ttl,
         });
 
         // Parent inode for ..
@@ -937,8 +969,8 @@ impl Filesystem for Fuse3OrthoUnionFS {
             name: OsString::from(".."),
             offset: 2,
             attr: self.virtual_dir_attr(parent_inode),
-            entry_ttl: TTL,
-            attr_ttl: TTL,
+            entry_ttl: self.cache_ttl,
+            attr_ttl: self.cache_ttl,
         });
 
         // Get entries from union index
@@ -975,8 +1007,8 @@ impl Filesystem for Fuse3OrthoUnionFS {
                 name: dir_entry.name.clone(),
                 offset: entry_offset,
                 attr,
-                entry_ttl: TTL,
-                attr_ttl: TTL,
+                entry_ttl: self.cache_ttl,
+                attr_ttl: self.cache_ttl,
             });
         }
 

@@ -27,10 +27,17 @@ use crate::executor::DdsClient;
 use crate::fuse::coalesce::{CoalesceResult, CoalescedResult, RequestCoalescer};
 use crate::fuse::{get_default_placeholder, validate_dds_or_placeholder, DdsFilename};
 
-/// Time-to-live for FUSE attribute caching.
+/// Default time-to-live for FUSE entry/attribute caching.
 ///
-/// This value is shared across all filesystem implementations.
-pub const TTL: Duration = Duration::from_secs(1);
+/// Used as the default for the consolidated ortho mount (overridable via
+/// `[fuse] attr_ttl_secs`) and directly by the passthrough/union filesystems.
+///
+/// The ortho mount is effectively read-only during a session (fixed directory
+/// listings, constant virtual DDS attrs), so a long TTL lets the kernel cache
+/// the tree instead of re-validating every second. A short TTL drives a storm of
+/// `readdir`/`lookup`/`getattr` requests — and dropped FUSE replies — under
+/// X-Plane's scenery scanner.
+pub const TTL: Duration = Duration::from_secs(3600);
 
 /// Experiment flag (env `XEL_SERVE_PLACEHOLDER_ON_MISS=1`).
 ///
