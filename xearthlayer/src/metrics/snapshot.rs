@@ -18,10 +18,12 @@ pub struct TelemetrySnapshot {
     // === FUSE metrics ===
     /// Total FUSE tiles served (from any source: memory, DDS disk, or job)
     pub fuse_tiles_served: u64,
-    /// Currently active FUSE requests
+    /// Currently active (unfulfilled) FUSE requests — the X-Plane on-demand backlog
     pub fuse_requests_active: usize,
     /// FUSE requests waiting in queue
     pub fuse_requests_waiting: usize,
+    /// Cumulative FUSE (X-Plane) requests received, including coalesced re-reads
+    pub fuse_requests_total: u64,
 
     // === Job metrics ===
     /// Total jobs submitted
@@ -143,6 +145,7 @@ impl Default for TelemetrySnapshot {
             fuse_tiles_served: 0,
             fuse_requests_active: 0,
             fuse_requests_waiting: 0,
+            fuse_requests_total: 0,
             jobs_submitted: 0,
             fuse_jobs_submitted: 0,
             jobs_completed: 0,
@@ -393,6 +396,7 @@ mod tests {
             fuse_tiles_served: 5000,
             fuse_requests_active: 8,
             fuse_requests_waiting: 12,
+            fuse_requests_total: 5200,
             jobs_submitted: 100,
             fuse_jobs_submitted: 80, // 80 from FUSE, 20 from prefetch
             jobs_completed: 90,

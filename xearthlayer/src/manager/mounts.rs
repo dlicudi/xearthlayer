@@ -711,6 +711,7 @@ impl MountManager {
             fuse_tiles_served: 0,
             fuse_requests_active: 0,
             fuse_requests_waiting: 0,
+            fuse_requests_total: 0,
             jobs_submitted: 0,
             fuse_jobs_submitted: 0,
             jobs_completed: 0,
@@ -777,6 +778,7 @@ impl MountManager {
             total.fuse_tiles_served += snapshot.fuse_tiles_served;
             total.fuse_requests_active += snapshot.fuse_requests_active;
             total.fuse_requests_waiting += snapshot.fuse_requests_waiting;
+            total.fuse_requests_total += snapshot.fuse_requests_total;
             total.jobs_submitted += snapshot.jobs_submitted;
             total.fuse_jobs_submitted += snapshot.fuse_jobs_submitted;
             total.jobs_completed += snapshot.jobs_completed;

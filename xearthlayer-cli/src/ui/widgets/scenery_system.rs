@@ -280,6 +280,18 @@ impl Widget for ScenerySystemWidget<'_> {
             Color::DarkGray
         };
 
+        // Backlog = tiles X-Plane has requested that XEL has not yet served
+        // (the on-demand unfulfilled gauge). A sustained high value is what
+        // starves the sim, so colour it green/yellow/red by severity.
+        let backlog = self.snapshot.fuse_requests_active;
+        let backlog_color = if backlog >= 40 {
+            Color::Red
+        } else if backlog >= 20 {
+            Color::Yellow
+        } else {
+            Color::Green
+        };
+
         // Left column: TILE REQUESTS
         Self::render_column(
             columns[0],
@@ -290,6 +302,7 @@ impl Widget for ScenerySystemWidget<'_> {
             request_sparkline_color,
             &[
                 ("Req/s", format!("{:.1}", request_rate), Color::Cyan),
+                ("Backlog", format!("{}", backlog), backlog_color),
                 ("Pressure", format!("Δ{:+.0}/s", pressure), pressure_color),
                 (
                     "Error Rate",

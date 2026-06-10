@@ -23,6 +23,10 @@ use tokio_util::sync::CancellationToken;
 /// Interval between time-series samples (100ms).
 const SAMPLE_INTERVAL: Duration = Duration::from_millis(100);
 
+/// Interval between X-Plane request-backlog log lines (5s). Throttled well
+/// below [`SAMPLE_INTERVAL`] so the file log is not flooded.
+const BACKLOG_LOG_INTERVAL: Duration = Duration::from_secs(5);
+
 /// Shared state handle for read-only access by reporters.
 pub type SharedMetricsState = Arc<RwLock<MetricsStateSnapshot>>;
 
@@ -111,6 +115,11 @@ impl MetricsDaemon {
         // Don't let missed ticks pile up
         sample_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
+        // Periodically surface the X-Plane on-demand backlog to the file log so
+        // it is observable in headless runs (the TUI snapshot is not logged).
+        let mut backlog_log_interval = tokio::time::interval(BACKLOG_LOG_INTERVAL);
+        backlog_log_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
         loop {
             tokio::select! {
                 biased;
@@ -130,6 +139,11 @@ impl MetricsDaemon {
                 _ = sample_interval.tick() => {
                     self.sample_time_series();
                     self.update_shared_state();
+                }
+
+                // Log the X-Plane request backlog
+                _ = backlog_log_interval.tick() => {
+                    self.log_xplane_backlog();
                 }
             }
         }
@@ -270,6 +284,7 @@ impl MetricsDaemon {
             }
             MetricEvent::FuseRequestStarted => {
                 self.state.fuse_requests_active += 1;
+                self.state.fuse_requests_total += 1;
             }
             MetricEvent::FuseRequestCompleted => {
                 self.state.fuse_requests_active = self.state.fuse_requests_active.saturating_sub(1);
@@ -281,6 +296,31 @@ impl MetricsDaemon {
                 self.state.fuse_requests_waiting =
                     self.state.fuse_requests_waiting.saturating_sub(1);
             }
+        }
+    }
+
+    /// Logs the current X-Plane on-demand request backlog.
+    ///
+    /// Emits at `info` when there is an outstanding backlog (so it stands out in
+    /// the file log during scenery-load bursts) and at `debug` when idle, to
+    /// avoid noise. This is the headless-visible counterpart to the TUI gauge.
+    fn log_xplane_backlog(&self) {
+        let unfulfilled = self.state.fuse_requests_active;
+        let requested_total = self.state.fuse_requests_total;
+        let served_total = self.state.fuse_tiles_served;
+        if unfulfilled > 0 {
+            tracing::info!(
+                xplane_unfulfilled = unfulfilled,
+                xplane_requested_total = requested_total,
+                xplane_served_total = served_total,
+                "X-Plane request backlog"
+            );
+        } else {
+            tracing::debug!(
+                xplane_requested_total = requested_total,
+                xplane_served_total = served_total,
+                "X-Plane request backlog empty"
+            );
         }
     }
 
@@ -582,6 +622,22 @@ mod tests {
 
         daemon.process_event(MetricEvent::FuseRequestCompleted);
         assert_eq!(daemon.state.fuse_requests_active, 1);
+    }
+
+    #[test]
+    fn test_fuse_requests_total_counts_every_request() {
+        let (mut daemon, _tx) = create_daemon();
+
+        // Three X-Plane requests arrive; one completes.
+        daemon.process_event(MetricEvent::FuseRequestStarted);
+        daemon.process_event(MetricEvent::FuseRequestStarted);
+        daemon.process_event(MetricEvent::FuseRequestStarted);
+        daemon.process_event(MetricEvent::FuseRequestCompleted);
+
+        // The cumulative total counts all requests received and never decrements,
+        // while the active gauge reflects the current unfulfilled backlog.
+        assert_eq!(daemon.state.fuse_requests_total, 3);
+        assert_eq!(daemon.state.fuse_requests_active, 2);
     }
 
     #[test]

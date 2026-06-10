@@ -327,6 +327,31 @@ pub fn chunk_to_tile_coords(coords: &DdsFilename) -> TileCoord {
 ///
 /// Implementations should provide `dds_client()`. The legacy `dds_handler()`
 /// method exists for backward compatibility but should not be used in new code.
+/// RAII guard that records an in-flight FUSE (X-Plane) request for the full
+/// duration of a [`DdsRequestor::request_dds_impl`] call.
+///
+/// Incrementing on construction and decrementing on drop keeps the
+/// `fuse_requests_active` gauge correct across *every* return path — cache hit,
+/// coalesced wait, timeout/magenta, or panic — which is exactly the on-demand
+/// backlog (tiles X-Plane has asked for but we have not yet served) that is
+/// otherwise invisible because coalesced re-reads submit no job.
+struct FuseRequestGuard {
+    client: crate::metrics::MetricsClient,
+}
+
+impl FuseRequestGuard {
+    fn new(client: crate::metrics::MetricsClient) -> Self {
+        client.fuse_request_started();
+        Self { client }
+    }
+}
+
+impl Drop for FuseRequestGuard {
+    fn drop(&mut self) {
+        self.client.fuse_request_completed();
+    }
+}
+
 #[allow(async_fn_in_trait)] // Internal trait, Send bounds not needed
 pub trait DdsRequestor: FileAttrBuilder {
     /// Get the DdsClient for submitting requests (new daemon architecture).
@@ -392,6 +417,12 @@ pub trait DdsRequestor: FileAttrBuilder {
         let tile = chunk_to_tile_coords(coords);
         let context_label = self.context_label();
         let timeout = self.generation_timeout();
+
+        // Track this X-Plane read as an unfulfilled on-demand request until it
+        // returns by ANY path (cache hit, coalesced wait, timeout/magenta). The
+        // guard increments `fuse_requests_active` now and decrements it on drop,
+        // so the backlog gauge counts coalesced re-reads that submit no job.
+        let _request_guard = self.metrics_client().cloned().map(FuseRequestGuard::new);
 
         // Notify tile request callback for FUSE inference (fast, non-blocking)
         if let Some(callback) = self.tile_request_callback() {
@@ -572,6 +603,25 @@ pub trait DdsRequestor: FileAttrBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fuse_request_guard_tracks_inflight_request() {
+        use crate::metrics::{MetricEvent, MetricsClient};
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let client = MetricsClient::new(tx);
+
+        // Constructing the guard marks an X-Plane request as started/unfulfilled.
+        let guard = FuseRequestGuard::new(client);
+        assert!(matches!(rx.try_recv(), Ok(MetricEvent::FuseRequestStarted)));
+
+        // Dropping it (request returned, by any path) marks it fulfilled,
+        // decrementing the backlog gauge.
+        drop(guard);
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(MetricEvent::FuseRequestCompleted)
+        ));
+    }
 
     #[test]
     fn test_virtual_dds_config_new() {

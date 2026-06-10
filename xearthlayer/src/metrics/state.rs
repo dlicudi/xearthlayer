@@ -229,10 +229,15 @@ pub struct AggregatedState {
     // =========================================================================
     /// Total FUSE tiles served (from any source: memory, DDS disk, or job).
     pub fuse_tiles_served: u64,
-    /// Currently active FUSE requests.
+    /// Currently active (unfulfilled) FUSE requests — tiles X-Plane has asked
+    /// for that have not yet been served. This is the on-demand backlog gauge.
     pub fuse_requests_active: u64,
     /// FUSE requests waiting in queue.
     pub fuse_requests_waiting: u64,
+    /// Cumulative count of FUSE (X-Plane) requests received. Unlike
+    /// `fuse_jobs_submitted`, this counts coalesced re-reads too, so it is the
+    /// true "how many tiles has X-Plane asked for" total.
+    pub fuse_requests_total: u64,
 
     // =========================================================================
     // Peak Tracking
@@ -293,6 +298,7 @@ impl AggregatedState {
             fuse_tiles_served: 0,
             fuse_requests_active: 0,
             fuse_requests_waiting: 0,
+            fuse_requests_total: 0,
             peak_bytes_per_second: 0.0,
         }
     }
@@ -342,6 +348,7 @@ impl AggregatedState {
         self.fuse_tiles_served = 0;
         self.fuse_requests_active = 0;
         self.fuse_requests_waiting = 0;
+        self.fuse_requests_total = 0;
         self.peak_bytes_per_second = 0.0;
     }
 }

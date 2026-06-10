@@ -142,6 +142,7 @@ impl MetricsReporter for TuiReporter {
             fuse_tiles_served: state.fuse_tiles_served,
             fuse_requests_active: state.fuse_requests_active as usize,
             fuse_requests_waiting: state.fuse_requests_waiting as usize,
+            fuse_requests_total: state.fuse_requests_total,
 
             // Job metrics
             jobs_submitted: state.jobs_submitted,
