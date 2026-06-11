@@ -21,7 +21,9 @@ tracing-appender = "0.2"
 # FUSE libraries - fuse3 is the active implementation (async multi-threaded)
 # fuser is retained for legacy type definitions but not used at runtime
 fuser = "0.14"
-fuse3 = { git = "https://github.com/dlicudi/fuse3", branch = "fix/macos-reply-error-resilience", features = ["tokio-runtime", "unprivileged"] }
+# Pinned by rev for reproducibility: upstream master + reply-resilience patch
+# (branch fix/macos-reply-error-resilience; pending upstream PR to Sherlock-Holo/fuse3)
+fuse3 = { git = "https://github.com/dlicudi/fuse3", rev = "849e84c509348ef9691b2f416abbc616fe8c16bb", features = ["tokio-runtime", "unprivileged"] }
 libc = "0.2"
 regex = "1.10"
 thiserror = "1.0"
