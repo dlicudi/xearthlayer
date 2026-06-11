@@ -95,6 +95,7 @@ pub fn run(args: RunArgs) -> Result<(), CliError> {
         .custom_scenery_path
         .clone()
         .or_else(|| config.xplane.scenery_dir.clone())
+        .or_else(|| xearthlayer::config::detect_custom_scenery().ok())
         .ok_or_else(|| {
             CliError::Config(
                 "No Custom Scenery path configured. \
