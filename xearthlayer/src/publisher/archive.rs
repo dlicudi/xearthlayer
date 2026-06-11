@@ -3,7 +3,8 @@
 //! Creates tar.gz archives from package directories and splits them
 //! into manageable parts for distribution.
 //!
-//! Uses external tools (`tar`, `split`) which are standard on Linux.
+//! Uses external tools (`tar`, `split`) which are standard on Linux and
+//! macOS. Only flags shared by the GNU and BSD variants are used.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -50,7 +51,9 @@ pub struct ArchivePart {
 /// Check if required external tools are available.
 pub fn check_required_tools() -> PublishResult<()> {
     check_tool_available("tar", &["--version"])?;
-    check_tool_available("split", &["--version"])?;
+    // BSD split (macOS) has no --version flag; splitting /dev/null is a
+    // portable no-op probe (empty input produces no output files).
+    check_tool_available("split", &["-b", "1", "/dev/null"])?;
     Ok(())
 }
 
@@ -225,11 +228,7 @@ fn split_archive(archive_path: &Path, part_size: u64) -> PublishResult<Vec<Archi
 
     let output = Command::new("split")
         .current_dir(archive_dir)
-        .args([
-            &format!("--bytes={}", part_size),
-            archive_name,
-            &split_prefix,
-        ])
+        .args(["-b", &part_size.to_string(), archive_name, &split_prefix])
         .output()
         .map_err(|e| PublishError::ArchiveFailed(format!("failed to run split: {}", e)))?;
 
