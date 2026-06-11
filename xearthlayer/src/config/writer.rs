@@ -146,7 +146,8 @@ retry_base_delay_ms = {}
 
 [xplane]
 ; X-Plane Custom Scenery directory for mounting scenery packs
-; If empty, auto-detects from ~/.x-plane/x-plane_install_12.txt
+; If empty, auto-detects from the X-Plane install reference file
+; (Linux: ~/.x-plane/x-plane_install_12.txt, macOS: ~/Library/Preferences/x-plane_install_12.txt)
 ; This is also where packages are installed by 'xearthlayer packages install'
 scenery_dir = {}
 

@@ -175,7 +175,8 @@ pub struct PackagesSettings {
     /// Local directory for installed packages (default: ~/.xearthlayer/packages).
     pub install_location: Option<PathBuf>,
     /// X-Plane Custom Scenery directory for overlay symlinks.
-    /// If None, auto-detects from xplane.scenery_dir or ~/.x-plane/x-plane_install_12.txt
+    /// If None, auto-detects from xplane.scenery_dir or the platform's
+    /// X-Plane install reference file (see [`crate::xplane::paths`]).
     pub custom_scenery_path: Option<PathBuf>,
     /// Automatically install overlay packages when installing ortho for same region.
     pub auto_install_overlays: bool,
